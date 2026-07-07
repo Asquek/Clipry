@@ -264,7 +264,14 @@ export default function App() {
   const [selectedPaths, setSelectedPaths] = useState([])
   const [cardWidth, setCardWidth] = useState(230)
 
+  // State baru untuk fitur Zoom & Pan (Geser)
+  const [zoomLevel, setZoomLevel] = useState(1)
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const panStart = useRef({ x: 0, y: 0 })
+
   const videoRef = useRef(null)
+  const videoContainerRef = useRef(null) // Tambahan ref container untuk fullscreen
   const audioCtxRef = useRef(null)
   const gainNodeRef = useRef(null)
   const sourceRef = useRef(null)
@@ -317,7 +324,6 @@ export default function App() {
     setActiveFolder(prev => prev || (folders.length > 0 ? 'All Videos' : null))
   }
 
-  // 🔄 FUNGSI REFRESH BARU
   async function handleRefresh() {
     if (!folder) return
     setStatus('Refreshing library...')
@@ -350,6 +356,8 @@ export default function App() {
     setSelected(clip)
     setCompressedPath(null)
     setDuration(0)
+    setZoomLevel(1) // Reset zoom
+    setPanOffset({ x: 0, y: 0 }) // Reset geser
     
     const savedMetadata = localStorage.getItem(`trim_${clip.path}`)
     if (savedMetadata) {
@@ -433,40 +441,34 @@ export default function App() {
     setIsMuted(nextMute)
     
     if (gainNodeRef.current) {
-      // Jika di-mute set gain ke 0, jika di-unmute kembalikan ke nilai state volume
       gainNodeRef.current.gain.value = nextMute ? 0 : volume
     }
   }
 
   function handleVolumeChange(e) {
-    const val = parseFloat(e.target.value) // Nilai dari slider (0 sampai 3)
+    const val = parseFloat(e.target.value)
     setVolume(val)
     
     if (!videoRef.current) return
 
-    // Inisialisasi Web Audio API saat pertama kali slider digerakkan (Lazy Init)
     if (!audioCtxRef.current) {
-      const AudioContext = window.Context || window.webkitAudioContext
+      const AudioContext = window.AudioContext || window.webkitAudioContext
       const ctx = new AudioContext()
       const gainNode = ctx.createGain()
       
-      // Hubungkan video ke Audio Context
       const source = ctx.createMediaElementSource(videoRef.current)
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
       
-      // Simpan ke Ref agar tidak ter-reset saat re-render
       audioCtxRef.current = ctx
       gainNodeRef.current = gainNode
       sourceRef.current = source
     }
 
-    // Atur amplifikasi suara lewat Gain Node (bukan lewat video.volume standar lagi)
     if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = val // Nilai 1 = normal, 2 = 200%, 3 = 300%
+      gainNodeRef.current.gain.value = val
     }
 
-    // Sinkronisasi status mute
     if (val > 0 && isMuted) {
       videoRef.current.muted = false
       setIsMuted(false)
@@ -474,6 +476,37 @@ export default function App() {
       videoRef.current.muted = true
       setIsMuted(true)
     }
+  }
+
+  // Fungsi Pemicu Layar Penuh (Fullscreen)
+  function toggleFullscreen() {
+    if (!videoContainerRef.current) return
+    if (!document.fullscreenElement) {
+      videoContainerRef.current.requestFullscreen().catch(err => {
+        console.error(`Error trying to enable fullscreen: ${err.message}`)
+      })
+    } else {
+      document.exitFullscreen()
+    }
+  }
+
+  // Fungsi Panning (Geser Layar Video sewaktu Zoom)
+  function handleMouseDownPan(e) {
+    if (zoomLevel <= 1) return // Hanya bisa digeser kalau sedang di-zoom
+    e.preventDefault()
+    setIsPanning(true)
+    panStart.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y }
+  }
+
+  function handleMouseMovePan(e) {
+    if (!isPanning || zoomLevel <= 1) return
+    const nextX = e.clientX - panStart.current.x
+    const nextY = e.clientY - panStart.current.y
+    setPanOffset({ x: nextX, y: nextY })
+  }
+
+  function handleMouseUpPan() {
+    setIsPanning(false)
   }
 
   async function doCompress() {
@@ -513,12 +546,11 @@ export default function App() {
     if (!confirm(confirmMsg)) return
 
     try {
-      // 🛠️ LANGKAH KRUSIAL: Lepas lock file dengan mematikan video player jika file yang sedang dibuka ingin dihapus
       if (selected && pathsToDelete.includes(selected.path)) {
         setIsPlaying(false);
         if (videoRef.current) {
           videoRef.current.pause();
-          videoRef.current.src = ""; // 🧹 Kosongkan src untuk melepaskan locked resource di Windows
+          videoRef.current.src = "";
           videoRef.current.load();
         }
       }
@@ -531,7 +563,7 @@ export default function App() {
       setSelectedPaths([])
       setIsSelectMode(false)
       setSelected(null)
-      setCompressedPath(null) // Ikut bersihkan path hasil kompresi temporer
+      setCompressedPath(null)
       setView('grid')
 
       if (folder) {
@@ -644,7 +676,6 @@ export default function App() {
             <span style={{ fontSize: 13, color: '#aaa' }}>
               {view === 'grid' ? `${activeFolder || '—'} (${activeClips.length} clips)` : selected?.name}
             </span>
-            {/* Teks Status Notifikasi Kecil di sebelah nama folder */}
             {status && (view === 'grid') && (
               <span style={{ fontSize: 12, color: '#5865F2', marginLeft: 10 }}>{status}</span>
             )}
@@ -660,7 +691,6 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: 8 }}>
-                {/* 🔄 TOMBOL REFRESH BARU */}
                 <button 
                   onClick={handleRefresh}
                   style={{ padding: '4px 12px', background: '#2a2a32', border: '1px solid #3d3d4d', color: '#fff', borderRadius: 4, fontSize: 12, cursor: 'pointer', fontWeight: 500 }}
@@ -733,7 +763,14 @@ export default function App() {
               
               {/* SISI KIRI: Video Player */}
               <div style={{ flex: 1.8, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%' }}>
-                <div style={{ flex: 1, background: '#000', borderRadius: 8, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {/* Container Video Utama (Mendukung Fullscreen & Mengunci Overflow saat di-zoom) */}
+                <div 
+                  ref={videoContainerRef}
+                  onMouseMove={handleMouseMovePan}
+                  onMouseUp={handleMouseUpPan}
+                  onMouseLeave={handleMouseUpPan}
+                  style={{ flex: 1, background: '#000', borderRadius: 8, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
+                >
                   <video
                     ref={videoRef}
                     key={selected.path}
@@ -741,8 +778,16 @@ export default function App() {
                     controls={false}
                     onLoadedMetadata={onVideoLoaded}
                     onTimeUpdate={handleTimeUpdate}
-                    onClick={togglePlay}
-                    style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'pointer' }}
+                    onMouseDown={handleMouseDownPan}
+                    onClick={(e) => { if (zoomLevel === 1) togglePlay(); }} // Klik main/jeda dinonaktifkan kalau lagi zoom biar ga bentrok sama geser layar
+                    style={{ 
+                      width: '100%', 
+                      height: '100%', 
+                      objectFit: 'contain', 
+                      cursor: zoomLevel > 1 ? (isPanning ? 'grabbing' : 'grab') : 'pointer',
+                      transform: `scale(${zoomLevel}) translate(${panOffset.x / zoomLevel}px, ${panOffset.y / zoomLevel}px)`,
+                      transition: isPanning ? 'none' : 'transform 0.15s ease-out'
+                    }}
                   />
                 </div>
               </div>
@@ -850,39 +895,74 @@ export default function App() {
               </div>
             </div>
 
-            {/* AREA BAWAH: Timeline Editor */}
+            {/* AREA BAWAH: Timeline Editor & Kontrol Tambahan */}
             <div style={{ background: '#161616', borderTop: '1px solid #2a2a2a', padding: '16px 20px 24px 20px', display: 'flex', flexDirection: 'column', gap: 14, flexShrink: 0, height: 160 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>✂️</span> Timeline Editor
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, width: '100%', justifyContent: 'space-between' }}>
                   
-                  <button 
-                    onClick={togglePlay} 
-                    style={{ background: '#2d2d3d', border: '1px solid #3d3d4d', color: '#fff', padding: '4px 12px', borderRadius: 4, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <span>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</span>
-                  </button>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 8px', borderRadius: 4, border: '1px solid #2d2d3d' }}>
-                    <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: '#fff', fontSize: 13, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}>
-                      {isMuted || volume === 0 ? '🔇' : '🔊'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>✂️</span> Timeline Editor
+                    </div>
+                    
+                    <button 
+                      onClick={togglePlay} 
+                      style={{ background: '#2d2d3d', border: '1px solid #3d3d4d', color: '#fff', padding: '4px 12px', borderRadius: 4, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <span>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</span>
                     </button>
-                    <input 
-                      type="range" 
-                      min="0" 
-                      max="3" 
-                      step="0.1" 
-                      value={isMuted ? 0 : volume}
-                      onChange={handleVolumeChange}
-                      style={{ width: 70, height: 4, cursor: 'pointer', accentColor: '#5865F2', background: '#444' }}
-                    />
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 8px', borderRadius: 4, border: '1px solid #2d2d3d' }}>
+                      <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: '#fff', fontSize: 13, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}>
+                        {isMuted || volume === 0 ? '🔇' : '🔊'}
+                      </button>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="3" 
+                        step="0.1" 
+                        value={isMuted ? 0 : volume}
+                        onChange={handleVolumeChange}
+                        style={{ width: 70, height: 4, cursor: 'pointer', accentColor: '#5865F2', background: '#444' }}
+                      />
+                    </div>
+
+                    <span style={{ fontSize: 12, color: '#888', fontFamily: 'monospace', marginLeft: 4 }}>
+                      {formatTime(currentTime)} / {formatTime(duration)}
+                    </span>
                   </div>
 
-                  <span style={{ fontSize: 12, color: '#888', fontFamily: 'monospace', marginLeft: 4 }}>
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </span>
+                  {/* KONTROL BARU: Zoom Slider & Tombol Fullscreen */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    {/* Slider Pembesar Gambar (Zoom) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 10px', borderRadius: 4, border: '1px solid #2d2d3d' }}>
+                      <span style={{ fontSize: 11, color: '#aaa' }}>🔍 Zoom:</span>
+                      <input 
+                        type="range" 
+                        min="1" 
+                        max="3" 
+                        step="0.1" 
+                        value={zoomLevel}
+                        onChange={(e) => {
+                          const nextZoom = parseFloat(e.target.value)
+                          setZoomLevel(nextZoom)
+                          if (nextZoom === 1) setPanOffset({ x: 0, y: 0 }) // Reset posisi kalau balik ke normal
+                        }}
+                        style={{ width: 80, height: 4, cursor: 'pointer', accentColor: '#5865F2', background: '#444' }}
+                      />
+                      <span style={{ fontSize: 11, color: '#fff', minWidth: 26, fontFamily: 'monospace' }}>{zoomLevel.toFixed(1)}x</span>
+                    </div>
+
+                    {/* Tombol Fullscreen */}
+                    <button 
+                      onClick={toggleFullscreen}
+                      title="Toggle Fullscreen"
+                      style={{ background: '#2d2d3d', border: '1px solid #3d3d4d', color: '#fff', padding: '5px 10px', borderRadius: 4, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                    >
+                      📺 Fullscreen
+                    </button>
+                  </div>
+
                 </div>
               </div>
               
