@@ -1,6 +1,6 @@
 {
   "name": "clipry",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "electron.cjs",
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
@@ -8,18 +8,19 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^8.0.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
-    "concurrently": "^8.0.0",
-    "wait-on": "^7.0.0",
     "vite": "^5.0.0",
-    "@vitejs/plugin-react": "^4.0.0"
+    "wait-on": "^7.0.0"
   },
   "dependencies": {
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "electron-updater": "^6.8.9",
     "fluent-ffmpeg": "^2.1.2",
-    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
   },
   "build": {
     "appId": "com.clipry.app",
@@ -30,6 +31,21 @@
       "preload.cjs",
       "node_modules/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe",
+        "to": "ffmpeg.exe"
+      },
+      {
+        "from": "drag-icon-dummy.png",
+        "to": "drag-icon-dummy.png"
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "Asquek",
+      "repo": "Clipry"
+    },
     "win": {
       "target": "nsis",
       "signingHashAlgorithms": [],
@@ -42,6 +58,7 @@
   },
   "allowScripts": {
     "electron@28.3.3": true,
-    "esbuild@0.21.5": true
+    "esbuild@0.21.5": true,
+    "electron-updater@6.8.9": true
   }
 }

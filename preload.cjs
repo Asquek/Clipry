@@ -9,7 +9,9 @@ contextBridge.exposeInMainWorld('api', {
   getVideoDuration: (videoPath) => ipcRenderer.invoke('get-video-duration', videoPath),
   getThumbnailAt: (videoPath, timeSec) => ipcRenderer.invoke('get-thumbnail-at', videoPath, timeSec),
   renameVideo: (oldPath, newName) => ipcRenderer.invoke('rename-video', oldPath, newName),
-  compressVideoWithTrim: (input, output, start, end) => ipcRenderer.invoke('compress-video-with-trim', input, output, start, end),
+  compressVideoWithTrim: (input, outputName, start, end) => ipcRenderer.invoke('compress-video-with-trim', input, outputName, start, end),
   startDrag: (filePath) => ipcRenderer.invoke('start-drag', filePath),
   deleteVideos: (filePaths) => ipcRenderer.invoke('delete-videos', filePaths),
+  restartToUpdate: () => ipcRenderer.invoke('restart-to-update'),
+  onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_, msg) => cb(msg)),
 })

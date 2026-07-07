@@ -1,21 +1,34 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const { autoUpdater } = require('electron-updater')
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg')
+const ffmpeg = require('fluent-ffmpeg')
+
+// Fix path untuk production
+const ffmpegPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'ffmpeg.exe')
+  : ffmpegInstaller.path
+ffmpeg.setFfmpegPath(ffmpegPath)
+
+let mainWindow
 
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
     }
   })
+  mainWindow.setMenuBarVisibility(false)
 
   if (app.isPackaged) {
-    win.loadFile(path.join(__dirname, 'dist/index.html'))
+    mainWindow.loadFile(path.join(__dirname, 'dist/index.html'))
   } else {
-    win.loadURL('http://localhost:5173')
+    mainWindow.loadURL('http://localhost:5173')
   }
 }
 
@@ -25,10 +38,30 @@ app.whenReady().then(() => {
     callback({ path: filePath })
   })
   createWindow()
+
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdatesAndNotify()
+
+    autoUpdater.on('update-available', () => {
+      mainWindow.webContents.send('update-status', 'Update tersedia, sedang download...')
+    })
+
+    autoUpdater.on('update-downloaded', () => {
+      mainWindow.webContents.send('update-status', 'Update siap! Restart untuk install.')
+    })
+
+    autoUpdater.on('error', (err) => {
+      mainWindow.webContents.send('update-status', `Update error: ${err.message}`)
+    })
+  }
 })
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+ipcMain.handle('restart-to-update', () => {
+  autoUpdater.quitAndInstall()
 })
 
 ipcMain.handle('select-folder', async () => {
@@ -57,7 +90,6 @@ ipcMain.handle('scan-folder', async (_, folderPath) => {
     })
     .filter(f => f.files.length > 0)
 
-  // Video langsung di root folder (bukan subfolder)
   const rootFiles = entries
     .filter(e => e.isFile() && exts.includes(path.extname(e.name).toLowerCase()))
     .map(e => ({
@@ -77,7 +109,6 @@ ipcMain.handle('scan-folder', async (_, folderPath) => {
 
 ipcMain.handle('trim-video', async (_, input, output, start, end) => {
   return new Promise((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg')
     ffmpeg(input)
       .setStartTime(start)
       .setDuration(end - start)
@@ -91,18 +122,13 @@ ipcMain.handle('trim-video', async (_, input, output, start, end) => {
 
 ipcMain.handle('compress-video', async (_, input, output) => {
   return new Promise((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg')
-    const targetSizeKb = 9 * 1024 // 9MB biar aman di bawah 10MB
-    
-    // Dapetin durasi dulu buat hitung bitrate
+    const targetSizeKb = 9 * 1024
     ffmpeg.ffprobe(input, (err, metadata) => {
       if (err) return reject(err.message)
-      
       const durationSec = metadata.format.duration
-      const targetBitrate = Math.floor((targetSizeKb * 8) / durationSec) // kbps
-      const audioBitrate = 128 // kbps
+      const targetBitrate = Math.floor((targetSizeKb * 8) / durationSec)
+      const audioBitrate = 128
       const videoBitrate = targetBitrate - audioBitrate
-
       ffmpeg(input)
         .videoCodec('libx264')
         .audioBitrate(`${audioBitrate}k`)
@@ -118,12 +144,9 @@ ipcMain.handle('compress-video', async (_, input, output) => {
 
 ipcMain.handle('get-thumbnail', async (_, videoPath) => {
   return new Promise((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg')
     const os = require('os')
     const thumbPath = path.join(os.tmpdir(), `thumb_${path.basename(videoPath)}.jpg`)
-    
     if (fs.existsSync(thumbPath)) return resolve(thumbPath)
-
     ffmpeg(videoPath)
       .screenshots({
         timestamps: ['10%'],
@@ -138,7 +161,6 @@ ipcMain.handle('get-thumbnail', async (_, videoPath) => {
 
 ipcMain.handle('get-video-duration', async (_, videoPath) => {
   return new Promise((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg')
     ffmpeg.ffprobe(videoPath, (err, metadata) => {
       if (err) return reject(err.message)
       resolve(metadata.format.duration || 0)
@@ -148,7 +170,6 @@ ipcMain.handle('get-video-duration', async (_, videoPath) => {
 
 ipcMain.handle('get-thumbnail-at', async (_, videoPath, timeSec) => {
   return new Promise((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg')
     const os = require('os')
     const thumbPath = path.join(os.tmpdir(), `thumb_${path.basename(videoPath)}_${timeSec}.jpg`)
     if (fs.existsSync(thumbPath)) return resolve(thumbPath)
@@ -165,126 +186,81 @@ ipcMain.handle('get-thumbnail-at', async (_, videoPath, timeSec) => {
 })
 
 ipcMain.handle('rename-video', async (_, oldPath, newName) => {
-  const path = require('path');
-  const fs = require('fs');
-  
-  const dir = path.dirname(oldPath);
-  const ext = path.extname(oldPath);
-  
-  // Pastikan ekstensi file (.mp4, .mkv, dll) tidak hilang
-  let finalizedName = newName;
-  if (!newName.endsWith(ext)) {
-    finalizedName = newName + ext;
-  }
-  
-  const newPath = path.join(dir, finalizedName);
-  
-  // Lakukan penggantian nama file fisik
-  fs.renameSync(oldPath, newPath);
-  
-  // Ambil data stats terbaru berkas yang telah diubah untuk dikembalikan ke React
-  const stats = fs.statSync(newPath);
-  return {
-    name: finalizedName,
-    path: newPath,
-    size: stats.size,
-    mtime: stats.mtimeMs
-  }
+  const dir = path.dirname(oldPath)
+  const ext = path.extname(oldPath)
+  let finalizedName = newName
+  if (!newName.endsWith(ext)) finalizedName = newName + ext
+  const newPath = path.join(dir, finalizedName)
+  fs.renameSync(oldPath, newPath)
+  const stats = fs.statSync(newPath)
+  return { name: finalizedName, path: newPath, size: stats.size, mtime: stats.mtimeMs }
 })
 
-// Ganti handler 'compress-video-with-trim' di electron.cjs kamu menjadi:
 ipcMain.handle('compress-video-with-trim', async (_, input, outputName, start, end) => {
   return new Promise((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg');
-    const os = require('os');
-    const path = require('path');
-    
-    // 📂 KITA ALIHKAN OUTPUT KE FOLDER SYSTEM TEMP (Bukan folder library game)
-    const tempDir = os.tmpdir();
-    const uniqueOutputName = `clipry_dist_${Date.now()}_${outputName}`;
-    const absoluteOutputPath = path.join(tempDir, uniqueOutputName);
-    
-    const trimDuration = end - start;
-    const targetSizeBits = 8.5 * 1024 * 1024 * 8;
-    const audioBitrateBits = 128 * 1024 * trimDuration;
-    const videoBitrateBits = targetSizeBits - audioBitrateBits;
-    
-    let calcVideoBitrateKbps = Math.floor((videoBitrateBits / trimDuration) / 1024);
-    if (calcVideoBitrateKbps > 4000) calcVideoBitrateKbps = 4000;
-    if (calcVideoBitrateKbps < 200) calcVideoBitrateKbps = 200; 
-
+    const os = require('os')
+    const tempDir = os.tmpdir()
+    const uniqueOutputName = `clipry_dist_${Date.now()}_${outputName}`
+    const absoluteOutputPath = path.join(tempDir, uniqueOutputName)
+    const trimDuration = end - start
+    const targetSizeBits = 8.5 * 1024 * 1024 * 8
+    const audioBitrateBits = 128 * 1024 * trimDuration
+    const videoBitrateBits = targetSizeBits - audioBitrateBits
+    let calcVideoBitrateKbps = Math.floor((videoBitrateBits / trimDuration) / 1024)
+    if (calcVideoBitrateKbps > 4000) calcVideoBitrateKbps = 4000
+    if (calcVideoBitrateKbps < 200) calcVideoBitrateKbps = 200
     ffmpeg(input)
       .setStartTime(start)
       .setDuration(trimDuration)
       .videoBitrate(calcVideoBitrateKbps)
       .audioCodec('aac')
       .audioBitrate(128)
-      .outputOptions([
-        '-map_metadata -1',
-        '-pix_fmt yuv420p',
-        '-movflags +faststart'
-      ])
+      .outputOptions(['-map_metadata -1', '-pix_fmt yuv420p', '-movflags +faststart'])
       .output(absoluteOutputPath)
-      .on('end', () => resolve(absoluteOutputPath)) // Kirim path temp absolut ke frontend
+      .on('end', () => resolve(absoluteOutputPath))
       .on('error', (err) => reject(err.message))
-      .run();
-  });
-});
+      .run()
+  })
+})
 
-// Perbarui juga handler 'start-drag' agar langsung menghapus berkas sesaat setelah di-drop
 ipcMain.handle('start-drag', (event, filePath) => {
-  const absolutePath = path.resolve(filePath);
-  
-  if (!fs.existsSync(absolutePath)) return false;
+  const absolutePath = path.resolve(filePath)
+  if (!fs.existsSync(absolutePath)) return false
 
-  // Jalankan native drag
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'drag-icon-dummy.png')
+    : path.join(__dirname, 'drag-icon-dummy.png')
+
   event.sender.startDrag({
     file: absolutePath,
-    icon: path.join(__dirname, 'drag-icon-dummy.png')
-  });
+    icon: fs.existsSync(iconPath) ? iconPath : path.join(__dirname, 'public', 'vite.svg')
+  })
 
-  // 🧹 AUTO-DELETE: Berikan delay pendek (sekitar 3 detik) setelah kursor dilepas 
-  // untuk memberi waktu Discord membaca & menyalin berkas tersebut ke server mereka sebelum dihapus fisik
   setTimeout(() => {
     try {
-      if (fs.existsSync(absolutePath)) {
-        fs.unlinkSync(absolutePath);
-        console.log("File kompresi temporer berhasil dibersihkan:", absolutePath);
-      }
+      if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath)
     } catch (err) {
-      console.error("Gagal membersihkan file kompresi:", err);
+      console.error("Gagal membersihkan file kompresi:", err)
     }
-  }, 3000);
-  
-  return true;
-});
+  }, 3000)
 
-// Tambahkan ini ke dalam file electron.cjs kamu
+  return true
+})
+
 ipcMain.handle('delete-videos', async (_, filePaths) => {
-  const fs = require('fs');
-  const path = require('path');
-  
-  let deletedCount = 0;
-  let errors = [];
-
+  let deletedCount = 0
+  let errors = []
   for (const filePath of filePaths) {
     try {
-      const absolutePath = path.resolve(filePath);
+      const absolutePath = path.resolve(filePath)
       if (fs.existsSync(absolutePath)) {
-        fs.unlinkSync(absolutePath); // Menghapus file secara permanen
-        deletedCount++;
-        
-        // Opsional: Hapus juga data trim di localStorage dari sisi backend jika diperlukan,
-        // namun lebih bersih kita handle pembersihan localStorage di sisi frontend React saja.
+        fs.unlinkSync(absolutePath)
+        deletedCount++
       }
     } catch (err) {
-      errors.push(`Gagal menghapus ${path.basename(filePath)}: ${err.message}`);
+      errors.push(`Gagal menghapus ${path.basename(filePath)}: ${err.message}`)
     }
   }
-
-  if (errors.length > 0) {
-    throw new Error(errors.join('\n'));
-  }
-  
-  return deletedCount;
+  if (errors.length > 0) throw new Error(errors.join('\n'))
+  return deletedCount
 })
