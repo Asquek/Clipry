@@ -1,3 +1,3 @@
-library buat hasil clip njir aowkaowkao
+small project
 
-100% vibecoded
+trying to build something like steelseries moments library, but for amd instant replay
