@@ -317,6 +317,20 @@ export default function App() {
     setActiveFolder(prev => prev || (folders.length > 0 ? 'All Videos' : null))
   }
 
+  // 🔄 FUNGSI REFRESH BARU
+  async function handleRefresh() {
+    if (!folder) return
+    setStatus('Refreshing library...')
+    try {
+      const folders = await window.api.scanFolder(folder)
+      setGamefolders(folders)
+      setStatus('✅ Library updated!')
+      setTimeout(() => setStatus(null), 3000)
+    } catch (err) {
+      setStatus(`❌ Refresh failed: ${err}`)
+    }
+  }
+
   async function openFolder() {
     const p = await window.api.selectFolder()
     if (!p) return
@@ -432,7 +446,7 @@ export default function App() {
 
     // Inisialisasi Web Audio API saat pertama kali slider digerakkan (Lazy Init)
     if (!audioCtxRef.current) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext
+      const AudioContext = window.Context || window.webkitAudioContext
       const ctx = new AudioContext()
       const gainNode = ctx.createGain()
       
@@ -630,6 +644,10 @@ export default function App() {
             <span style={{ fontSize: 13, color: '#aaa' }}>
               {view === 'grid' ? `${activeFolder || '—'} (${activeClips.length} clips)` : selected?.name}
             </span>
+            {/* Teks Status Notifikasi Kecil di sebelah nama folder */}
+            {status && (view === 'grid') && (
+              <span style={{ fontSize: 12, color: '#5865F2', marginLeft: 10 }}>{status}</span>
+            )}
           </div>
 
           {view === 'grid' && activeClips.length > 0 && (
@@ -642,6 +660,14 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: 8 }}>
+                {/* 🔄 TOMBOL REFRESH BARU */}
+                <button 
+                  onClick={handleRefresh}
+                  style={{ padding: '4px 12px', background: '#2a2a32', border: '1px solid #3d3d4d', color: '#fff', borderRadius: 4, fontSize: 12, cursor: 'pointer', fontWeight: 500 }}
+                >
+                  🔄 Refresh
+                </button>
+
                 {isSelectMode ? (
                   <>
                     <button 
@@ -846,8 +872,8 @@ export default function App() {
                     <input 
                       type="range" 
                       min="0" 
-                      max="3" // 👈 Kita naikkan batas max dari "1" menjadi "3" (Amplifikasi hingga 300%)
-                      step="0.1" // 👈 Naik turunnya per 10% agar lebih halus saat digeser
+                      max="3" 
+                      step="0.1" 
                       value={isMuted ? 0 : volume}
                       onChange={handleVolumeChange}
                       style={{ width: 70, height: 4, cursor: 'pointer', accentColor: '#5865F2', background: '#444' }}
