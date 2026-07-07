@@ -5,8 +5,23 @@ function formatSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+// 🛠️ PERBAIKAN DI SINI: Memisahkan Tanggal dan Jam agar formatnya presisi (Contoh: 09 Jun 2026, 15:30)
 function formatDate(ms) {
-  return new Date(ms).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
+  const dateObj = new Date(ms)
+  
+  const dateStr = dateObj.toLocaleDateString('en-US', { 
+    day: '2-digit', 
+    month: 'short', 
+    year: 'numeric' 
+  })
+  
+  const timeStr = dateObj.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
+
+  return `${dateStr}, ${timeStr}`
 }
 
 function formatTime(sec) {
@@ -292,13 +307,20 @@ export default function App() {
   })
   const [recordingAction, setRecordingAction] = useState(null)
 
+  // Sort By State
+  const [sortBy, setSortBy] = useState(() => {
+    return localStorage.getItem('clipry_sort_by') || 'date-desc'
+  })
+
+  // Ref untuk mengunci koordinat scroll grid
+  const gridScrollRef = useRef(0)
+  const gridContainerRef = useRef(null)
+
   const videoRef = useRef(null)
   const videoContainerRef = useRef(null)
   const audioCtxRef = useRef(null)
   const gainNodeRef = useRef(null)
   const sourceRef = useRef(null)
-  const gridScrollRef = useRef(0)
-  const gridContainerRef = useRef(null)
 
   useEffect(() => {
     const savedFolder = localStorage.getItem('clipry_saved_folder')
@@ -334,13 +356,6 @@ export default function App() {
     }
   }, [])
 
-  // Kembalikan posisi scroll saat view berubah kembali ke 'grid'
-  useEffect(() => {
-    if (view === 'grid' && gridContainerRef.current) {
-      gridContainerRef.current.scrollTop = gridScrollRef.current
-    }
-  }, [view])
-
   useEffect(() => {
     if (selected && duration > 0) {
       const data = { start: trimStart, end: trimEnd }
@@ -358,19 +373,15 @@ export default function App() {
       const code = e.code === 'Space' ? 'Space' : e.code
 
       if (['Space', 'ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(code)) {
-        // Blokir akselerasi halaman bawaan browser hanya jika tombol tersebut ter-bind
         if (Object.values(hotkeys).includes(code)) e.preventDefault()
       }
 
-      // 1. Play / Pause
       if (hotkeys.playPause && code === hotkeys.playPause) {
         togglePlay()
       }
-      // 2. Zoom In
       else if (hotkeys.zoomIn && code === hotkeys.zoomIn) {
         setZoomLevel(prev => Math.min(3, prev + 0.2))
       }
-      // 3. Zoom Out
       else if (hotkeys.zoomOut && code === hotkeys.zoomOut) {
         setZoomLevel(prev => {
           const next = Math.max(1, prev - 0.2)
@@ -378,27 +389,22 @@ export default function App() {
           return next
         })
       }
-      // 4. Skip Forward 5s
       else if (hotkeys.skipForward5 && code === hotkeys.skipForward5) {
         videoRef.current.currentTime = Math.min(trimEnd, videoRef.current.currentTime + 5)
       }
-      // 5. Skip Backward 5s
       else if (hotkeys.skipBackward5 && code === hotkeys.skipBackward5) {
         videoRef.current.currentTime = Math.max(trimStart, videoRef.current.currentTime - 5)
       }
-      // 6. Skip Forward 1 Frame
       else if (hotkeys.nextFrame && code === hotkeys.nextFrame) {
         if (!isPlaying) {
           videoRef.current.currentTime = Math.min(trimEnd, videoRef.current.currentTime + FRAME_TIME)
         }
       }
-      // 7. Skip Backward 1 Frame
       else if (hotkeys.prevFrame && code === hotkeys.prevFrame) {
         if (!isPlaying) {
           videoRef.current.currentTime = Math.max(trimStart, videoRef.current.currentTime - FRAME_TIME)
         }
       }
-      // 8. Fullscreen
       else if (hotkeys.fullscreen && code === hotkeys.fullscreen) {
         toggleFullscreen()
       }
@@ -407,6 +413,13 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [view, hotkeys, trimStart, trimEnd, isPlaying, isEditingName])
+
+  // Mengunci Posisi Scroll sewaktu keluar dari Player
+  useEffect(() => {
+    if (view === 'grid' && gridContainerRef.current) {
+      gridContainerRef.current.scrollTop = gridScrollRef.current
+    }
+  }, [view])
 
   async function loadFolderData(folderPath) {
     setFolder(folderPath)
@@ -707,10 +720,9 @@ export default function App() {
     setRecordingAction(actionKey)
   }
 
-  // 🛠️ FUNGSI UNBIND HOTKEY (CLEAR)
   function unbindHotkey(actionKey) {
     setHotkeys(prev => {
-      const updated = { ...prev, [actionKey]: null } // Set ke null (kosong)
+      const updated = { ...prev, [actionKey]: null }
       localStorage.setItem('clipry_hotkeys', JSON.stringify(updated))
       return updated
     })
@@ -741,9 +753,25 @@ export default function App() {
     localStorage.setItem('clipry_hotkeys', JSON.stringify(DEFAULT_HOTKEYS))
   }
 
-  const activeClips = activeFolder === 'All Videos'
-    ? gamefolders.reduce((acc, folder) => [...acc, ...folder.files], []).sort((a, b) => b.mtime - a.mtime)
+  // Engine Sortir Video Pustaka
+  const rawClips = activeFolder === 'All Videos'
+    ? gamefolders.reduce((acc, folder) => [...acc, ...folder.files], [])
     : gamefolders.find(f => f.name === activeFolder)?.files || []
+
+  const activeClips = [...rawClips].sort((a, b) => {
+    if (sortBy === 'date-desc') return b.mtime - a.mtime       
+    if (sortBy === 'date-asc') return a.mtime - b.mtime        
+    if (sortBy === 'size-desc') return b.size - a.size         
+    if (sortBy === 'size-asc') return a.size - b.size          
+    if (sortBy === 'name-asc') return a.name.localeCompare(b.name) 
+    return 0
+  })
+
+  function handleSortChange(e) {
+    const nextSort = e.target.value
+    setSortBy(nextSort)
+    localStorage.setItem('clipry_sort_by', nextSort)
+  }
 
   const getBtnStyle = (width) => ({
     padding: '4px 8px',
@@ -798,7 +826,7 @@ export default function App() {
               onClick={() => { setActiveFolder(gf.name); setSelected(null); setIsSelectMode(false); setSelectedPaths([]); setView('grid') }}
               style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === gf.name && view === 'grid' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === gf.name && view === 'grid' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === gf.name && view === 'grid' ? '#fff' : '#999' }}
             >
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}> {gf.name}</span>
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🎮 {gf.name}</span>
               <span style={{ fontSize: 11, color: '#555', marginLeft: 6, flexShrink: 0 }}>{gf.files.length}</span>
             </div>
           ))}
@@ -823,15 +851,41 @@ export default function App() {
           </div>
 
           {view === 'grid' && activeClips.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              
+              {/* Dropdown Sort By */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 8px', borderRadius: 6, border: '1px solid #2d2d3d' }}>
+                <span style={{ fontSize: 11, color: '#aaa' }}>Sort By:</span>
+                <select
+                  value={sortBy}
+                  onChange={handleSortChange}
+                  style={{
+                    background: '#2a2a32',
+                    color: '#fff',
+                    border: '1px solid #3d3d4d',
+                    borderRadius: 4,
+                    padding: '2px 4px',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="date-desc">Date (Newest)</option>
+                  <option value="date-asc">Date (Oldest)</option>
+                  <option value="size-desc">Size (Largest)</option>
+                  <option value="size-asc">Size (Smallest)</option>
+                  <option value="name-asc">Name (A-Z)</option>
+                </select>
+              </div>
+
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 6px', borderRadius: 6, border: '1px solid #2d2d3d' }}>
-                <span style={{ fontSize: 11, color: '#aaa', marginRight: 4, marginLeft: 2 }}>Thumbnails Size:</span>
+                <span style={{ fontSize: 11, color: '#aaa', marginRight: 4, marginLeft: 2 }}>Thumbnails:</span>
                 <button onClick={() => changeCardWidthPreset(160)} style={getBtnStyle(160)}>Small</button>
                 <button onClick={() => changeCardWidthPreset(230)} style={getBtnStyle(230)}>Medium</button>
                 <button onClick={() => changeCardWidthPreset(320)} style={getBtnStyle(320)}>Large</button>
               </div>
 
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 6 }}>
                 <button 
                   onClick={handleRefresh}
                   style={{ padding: '4px 12px', background: '#2a2a32', border: '1px solid #3d3d4d', color: '#fff', borderRadius: 4, fontSize: 12, cursor: 'pointer', fontWeight: 500 }}
@@ -871,7 +925,7 @@ export default function App() {
         {/* Grid View */}
         {view === 'grid' && (
           <div 
-            ref={gridContainerRef} // 🛠️ PASANG REF DI SINI
+            ref={gridContainerRef} 
             className="modern-scroll" 
             style={{ flex: 1, overflowY: 'auto', padding: 16 }}
           >
@@ -899,7 +953,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB PENGATURAN HOTKEY + FITUR UNBIND */}
+        {/* Tab Pengaturan Hotkey */}
         {view === 'settings' && (
           <div className="modern-scroll" style={{ flex: 1, overflowY: 'auto', padding: '30px 40px' }}>
             <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, color: '#fff' }}>Keyboard Shortcuts</h2>
@@ -919,7 +973,6 @@ export default function App() {
                 <div key={item.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: index === arr.length - 1 ? 'none' : '1px solid #222' }}>
                   <span style={{ fontSize: 13, color: '#ddd', fontWeight: 500 }}>{item.label}</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {/* Tombol Assign Hotkey */}
                     <button
                       onClick={() => startRecordingHotkey(item.key)}
                       style={{
@@ -939,7 +992,6 @@ export default function App() {
                       {recordingAction === item.key ? 'Press any key...' : (hotkeys[item.key] || 'NONE')}
                     </button>
                     
-                    {/* ❌ TOMBOL UNBIND (Hanya muncul jika hotkey sedang tidak dalam keadaan kosong/NONE) */}
                     <button
                       onClick={() => unbindHotkey(item.key)}
                       disabled={!hotkeys[item.key] || recordingAction === item.key}
