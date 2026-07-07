@@ -15,6 +15,21 @@ function formatTime(sec) {
   return `${m}:${s}`
 }
 
+// Nilai standar 1 frame pada video 60fps (1 / 60 = ~0.0166 detik)
+const FRAME_TIME = 1 / 60 
+
+// Konfigurasi Default Hotkey bawaan aplikasi
+const DEFAULT_HOTKEYS = {
+  playPause: 'Space',
+  zoomIn: 'Equal',       
+  zoomOut: 'Minus',      
+  skipForward5: 'ArrowRight',
+  skipBackward5: 'ArrowLeft',
+  nextFrame: 'Period',   
+  prevFrame: 'Comma',    
+  fullscreen: 'KeyF'     
+}
+
 function TrimSlider({ duration, trimStart, trimEnd, currentTime, onStartChange, onEndChange, onPlayheadChange }) {
   const [dragging, setDragging] = useState(null)
   const sliderRef = useRef(null)
@@ -250,7 +265,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0)
   const [compressing, setCompressing] = useState(false)
   const [status, setStatus] = useState(null)
-  const [view, setView] = useState('grid')
+  const [view, setView] = useState('grid') 
   
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
@@ -264,14 +279,21 @@ export default function App() {
   const [selectedPaths, setSelectedPaths] = useState([])
   const [cardWidth, setCardWidth] = useState(230)
 
-  // State baru untuk fitur Zoom & Pan (Geser)
+  // Zoom & Pan States
   const [zoomLevel, setZoomLevel] = useState(1)
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const panStart = useRef({ x: 0, y: 0 })
 
+  // Hotkeys States
+  const [hotkeys, setHotkeys] = useState(() => {
+    const saved = localStorage.getItem('clipry_hotkeys')
+    return saved ? JSON.parse(saved) : DEFAULT_HOTKEYS
+  })
+  const [recordingAction, setRecordingAction] = useState(null)
+
   const videoRef = useRef(null)
-  const videoContainerRef = useRef(null) // Tambahan ref container untuk fullscreen
+  const videoContainerRef = useRef(null)
   const audioCtxRef = useRef(null)
   const gainNodeRef = useRef(null)
   const sourceRef = useRef(null)
@@ -317,6 +339,66 @@ export default function App() {
     }
   }, [trimStart, trimEnd, selected, duration])
 
+  // HOTKEYS INTERCEPTION RADAR
+  useEffect(() => {
+    if (view !== 'player' || !videoRef.current || isEditingName) return
+
+    function handleKeyDown(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+
+      const code = e.code === 'Space' ? 'Space' : e.code
+
+      if (['Space', 'ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(code)) {
+        // Blokir akselerasi halaman bawaan browser hanya jika tombol tersebut ter-bind
+        if (Object.values(hotkeys).includes(code)) e.preventDefault()
+      }
+
+      // 1. Play / Pause
+      if (hotkeys.playPause && code === hotkeys.playPause) {
+        togglePlay()
+      }
+      // 2. Zoom In
+      else if (hotkeys.zoomIn && code === hotkeys.zoomIn) {
+        setZoomLevel(prev => Math.min(3, prev + 0.2))
+      }
+      // 3. Zoom Out
+      else if (hotkeys.zoomOut && code === hotkeys.zoomOut) {
+        setZoomLevel(prev => {
+          const next = Math.max(1, prev - 0.2)
+          if (next === 1) setPanOffset({ x: 0, y: 0 })
+          return next
+        })
+      }
+      // 4. Skip Forward 5s
+      else if (hotkeys.skipForward5 && code === hotkeys.skipForward5) {
+        videoRef.current.currentTime = Math.min(trimEnd, videoRef.current.currentTime + 5)
+      }
+      // 5. Skip Backward 5s
+      else if (hotkeys.skipBackward5 && code === hotkeys.skipBackward5) {
+        videoRef.current.currentTime = Math.max(trimStart, videoRef.current.currentTime - 5)
+      }
+      // 6. Skip Forward 1 Frame
+      else if (hotkeys.nextFrame && code === hotkeys.nextFrame) {
+        if (!isPlaying) {
+          videoRef.current.currentTime = Math.min(trimEnd, videoRef.current.currentTime + FRAME_TIME)
+        }
+      }
+      // 7. Skip Backward 1 Frame
+      else if (hotkeys.prevFrame && code === hotkeys.prevFrame) {
+        if (!isPlaying) {
+          videoRef.current.currentTime = Math.max(trimStart, videoRef.current.currentTime - FRAME_TIME)
+        }
+      }
+      // 8. Fullscreen
+      else if (hotkeys.fullscreen && code === hotkeys.fullscreen) {
+        toggleFullscreen()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [view, hotkeys, trimStart, trimEnd, isPlaying, isEditingName])
+
   async function loadFolderData(folderPath) {
     setFolder(folderPath)
     const folders = await window.api.scanFolder(folderPath)
@@ -356,8 +438,8 @@ export default function App() {
     setSelected(clip)
     setCompressedPath(null)
     setDuration(0)
-    setZoomLevel(1) // Reset zoom
-    setPanOffset({ x: 0, y: 0 }) // Reset geser
+    setZoomLevel(1)
+    setPanOffset({ x: 0, y: 0 })
     
     const savedMetadata = localStorage.getItem(`trim_${clip.path}`)
     if (savedMetadata) {
@@ -478,21 +560,19 @@ export default function App() {
     }
   }
 
-  // Fungsi Pemicu Layar Penuh (Fullscreen)
   function toggleFullscreen() {
     if (!videoContainerRef.current) return
     if (!document.fullscreenElement) {
       videoContainerRef.current.requestFullscreen().catch(err => {
-        console.error(`Error trying to enable fullscreen: ${err.message}`)
+        console.error(`Error Enable Fullscreen: ${err.message}`)
       })
     } else {
       document.exitFullscreen()
     }
   }
 
-  // Fungsi Panning (Geser Layar Video sewaktu Zoom)
   function handleMouseDownPan(e) {
-    if (zoomLevel <= 1) return // Hanya bisa digeser kalau sedang di-zoom
+    if (zoomLevel <= 1) return
     e.preventDefault()
     setIsPanning(true)
     panStart.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y }
@@ -607,6 +687,44 @@ export default function App() {
     }
   }
 
+  function startRecordingHotkey(actionKey) {
+    setRecordingAction(actionKey)
+  }
+
+  // 🛠️ FUNGSI UNBIND HOTKEY (CLEAR)
+  function unbindHotkey(actionKey) {
+    setHotkeys(prev => {
+      const updated = { ...prev, [actionKey]: null } // Set ke null (kosong)
+      localStorage.setItem('clipry_hotkeys', JSON.stringify(updated))
+      return updated
+    })
+  }
+
+  useEffect(() => {
+    if (!recordingAction) return
+
+    function handleCapture(e) {
+      e.preventDefault()
+      e.stopPropagation()
+
+      const newKey = e.code
+      setHotkeys(prev => {
+        const updated = { ...prev, [recordingAction]: newKey }
+        localStorage.setItem('clipry_hotkeys', JSON.stringify(updated))
+        return updated
+      })
+      setRecordingAction(null)
+    }
+
+    window.addEventListener('keydown', handleCapture, true)
+    return () => window.removeEventListener('keydown', handleCapture, true)
+  }, [recordingAction])
+
+  function resetHotkeysToDefault() {
+    setHotkeys(DEFAULT_HOTKEYS)
+    localStorage.setItem('clipry_hotkeys', JSON.stringify(DEFAULT_HOTKEYS))
+  }
+
   const activeClips = activeFolder === 'All Videos'
     ? gamefolders.reduce((acc, folder) => [...acc, ...folder.files], []).sort((a, b) => b.mtime - a.mtime)
     : gamefolders.find(f => f.name === activeFolder)?.files || []
@@ -632,15 +750,22 @@ export default function App() {
           <span style={{ fontSize: 18 }}>🎬</span>
           <span style={{ fontWeight: 700, fontSize: 15 }}>Clipry</span>
         </div>
-        <button onClick={openFolder} style={{ margin: '10px 10px 6px', padding: '8px', background: '#5865F2', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+        <button onClick={openFolder} style={{ margin: '10px 10px 4px', padding: '8px', background: '#5865F2', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
           + Choose Folder
+        </button>
+
+        <button 
+          onClick={() => { setView('settings'); setSelected(null); }}
+          style={{ margin: '0px 10px 10px', padding: '6px', background: view === 'settings' ? '#2a2a3a' : '#222', color: '#ccc', border: '1px solid #333', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 500 }}
+        >
+          ⚙️ Hotkey Settings
         </button>
         
         <div className="modern-scroll" style={{ flex: 1, overflowY: 'auto' }}>
           {gamefolders.length > 0 && (
             <div
               onClick={() => { setActiveFolder('All Videos'); setSelected(null); setIsSelectMode(false); setSelectedPaths([]); setView('grid') }}
-              style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === 'All Videos' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === 'All Videos' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === 'All Videos' ? '#fff' : '#999' }}
+              style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === 'All Videos' && view === 'grid' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === 'All Videos' && view === 'grid' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === 'All Videos' && view === 'grid' ? '#fff' : '#999' }}
             >
               <span style={{ fontWeight: 600 }}>🌐 All Videos</span>
               <span style={{ fontSize: 11, color: '#555', marginLeft: 6, flexShrink: 0 }}>
@@ -655,7 +780,7 @@ export default function App() {
             <div
               key={gf.name}
               onClick={() => { setActiveFolder(gf.name); setSelected(null); setIsSelectMode(false); setSelectedPaths([]); setView('grid') }}
-              style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === gf.name ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === gf.name ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === gf.name ? '#fff' : '#999' }}
+              style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === gf.name && view === 'grid' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === gf.name && view === 'grid' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === gf.name && view === 'grid' ? '#fff' : '#999' }}
             >
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🎮 {gf.name}</span>
               <span style={{ fontSize: 11, color: '#555', marginLeft: 6, flexShrink: 0 }}>{gf.files.length}</span>
@@ -670,11 +795,11 @@ export default function App() {
         {/* Header */}
         <div style={{ padding: '10px 16px', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {view === 'player' && (
+            {view !== 'grid' && (
               <button onClick={() => setView('grid')} style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: 18, padding: 0 }}>←</button>
             )}
             <span style={{ fontSize: 13, color: '#aaa' }}>
-              {view === 'grid' ? `${activeFolder || '—'} (${activeClips.length} clips)` : selected?.name}
+              {view === 'settings' ? 'Global Application Settings' : view === 'grid' ? `${activeFolder || '—'} (${activeClips.length} clips)` : selected?.name}
             </span>
             {status && (view === 'grid') && (
               <span style={{ fontSize: 12, color: '#5865F2', marginLeft: 10 }}>{status}</span>
@@ -754,16 +879,86 @@ export default function App() {
           </div>
         )}
 
+        {/* TAB PENGATURAN HOTKEY + FITUR UNBIND */}
+        {view === 'settings' && (
+          <div className="modern-scroll" style={{ flex: 1, overflowY: 'auto', padding: '30px 40px' }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, color: '#fff' }}>Keyboard Shortcuts</h2>
+            <p style={{ fontSize: 13, color: '#aaa', marginBottom: 24 }}>Click any action button below, then tap a new key on your keyboard to assign a shortcut.</p>
+            
+            <div style={{ background: '#161616', borderRadius: 8, border: '1px solid #2a2a2a', maxWidth: 650, display: 'flex', flexDirection: 'column' }}>
+              {[
+                { key: 'playPause', label: 'Play / Pause Video' },
+                { key: 'zoomIn', label: 'Zoom In (+)' },
+                { key: 'zoomOut', label: 'Zoom Out (-)' },
+                { key: 'skipForward5', label: 'Skip Forward 5 Seconds' },
+                { key: 'skipBackward5', label: 'Skip Backward 5 Seconds' },
+                { key: 'nextFrame', label: 'Skip Forward 1 Frame (Paused Only)' },
+                { key: 'prevFrame', label: 'Skip Backward 1 Frame (Paused Only)' },
+                { key: 'fullscreen', label: 'Toggle Fullscreen Mode' }
+              ].map((item, index, arr) => (
+                <div key={item.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: index === arr.length - 1 ? 'none' : '1px solid #222' }}>
+                  <span style={{ fontSize: 13, color: '#ddd', fontWeight: 500 }}>{item.label}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {/* Tombol Assign Hotkey */}
+                    <button
+                      onClick={() => startRecordingHotkey(item.key)}
+                      style={{
+                        background: recordingAction === item.key ? '#ff5722' : '#2d2d3d',
+                        color: recordingAction === item.key ? '#fff' : (hotkeys[item.key] ? '#fff' : '#666'),
+                        border: recordingAction === item.key ? '1px solid #ff5722' : '1px solid #444',
+                        padding: '6px 16px',
+                        borderRadius: 4,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        cursor: 'pointer',
+                        minWidth: 130,
+                        textAlign: 'center',
+                        fontWeight: 600
+                      }}
+                    >
+                      {recordingAction === item.key ? 'Press any key...' : (hotkeys[item.key] || 'NONE')}
+                    </button>
+                    
+                    {/* ❌ TOMBOL UNBIND (Hanya muncul jika hotkey sedang tidak dalam keadaan kosong/NONE) */}
+                    <button
+                      onClick={() => unbindHotkey(item.key)}
+                      disabled={!hotkeys[item.key] || recordingAction === item.key}
+                      title="Clear Shortcut"
+                      style={{
+                        background: '#222',
+                        border: '1px solid #333',
+                        color: hotkeys[item.key] && recordingAction !== item.key ? '#ff4d4d' : '#444',
+                        padding: '6px 10px',
+                        borderRadius: 4,
+                        fontSize: 11,
+                        cursor: hotkeys[item.key] && recordingAction !== item.key ? 'pointer' : 'not-allowed',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      ❌
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button 
+              onClick={resetHotkeysToDefault}
+              style={{ marginTop: 20, padding: '8px 16px', background: 'transparent', color: '#ff4d4d', border: '1px solid #ff4d4d', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+            >
+              Reset to Defaults
+            </button>
+          </div>
+        )}
+
         {/* Player View */}
         {view === 'player' && selected && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             
-            {/* AREA ATAS */}
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '20px 20px 10px 20px', gap: 20 }}>
               
               {/* SISI KIRI: Video Player */}
               <div style={{ flex: 1.8, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%' }}>
-                {/* Container Video Utama (Mendukung Fullscreen & Mengunci Overflow saat di-zoom) */}
                 <div 
                   ref={videoContainerRef}
                   onMouseMove={handleMouseMovePan}
@@ -779,7 +974,7 @@ export default function App() {
                     onLoadedMetadata={onVideoLoaded}
                     onTimeUpdate={handleTimeUpdate}
                     onMouseDown={handleMouseDownPan}
-                    onClick={(e) => { if (zoomLevel === 1) togglePlay(); }} // Klik main/jeda dinonaktifkan kalau lagi zoom biar ga bentrok sama geser layar
+                    onClick={(e) => { if (zoomLevel === 1) togglePlay(); }}
                     style={{ 
                       width: '100%', 
                       height: '100%', 
@@ -795,7 +990,6 @@ export default function App() {
               {/* SISI KANAN: Side Panel */}
               <div className="modern-scroll" style={{ width: 300, minWidth: 300, display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto' }}>
                 
-                {/* Panel Detail Video */}
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 14, color: '#ccc', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -849,7 +1043,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Panel Discord Compressor */}
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>🚀</span> COMPRESS
@@ -932,9 +1125,7 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* KONTROL BARU: Zoom Slider & Tombol Fullscreen */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                    {/* Slider Pembesar Gambar (Zoom) */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 10px', borderRadius: 4, border: '1px solid #2d2d3d' }}>
                       <span style={{ fontSize: 11, color: '#aaa' }}>🔍 Zoom:</span>
                       <input 
@@ -946,14 +1137,13 @@ export default function App() {
                         onChange={(e) => {
                           const nextZoom = parseFloat(e.target.value)
                           setZoomLevel(nextZoom)
-                          if (nextZoom === 1) setPanOffset({ x: 0, y: 0 }) // Reset posisi kalau balik ke normal
+                          if (nextZoom === 1) setPanOffset({ x: 0, y: 0 })
                         }}
                         style={{ width: 80, height: 4, cursor: 'pointer', accentColor: '#5865F2', background: '#444' }}
                       />
                       <span style={{ fontSize: 11, color: '#fff', minWidth: 26, fontFamily: 'monospace' }}>{zoomLevel.toFixed(1)}x</span>
                     </div>
 
-                    {/* Tombol Fullscreen */}
                     <button 
                       onClick={toggleFullscreen}
                       title="Toggle Fullscreen"
