@@ -297,6 +297,8 @@ export default function App() {
   const audioCtxRef = useRef(null)
   const gainNodeRef = useRef(null)
   const sourceRef = useRef(null)
+  const gridScrollRef = useRef(0)
+  const gridContainerRef = useRef(null)
 
   useEffect(() => {
     const savedFolder = localStorage.getItem('clipry_saved_folder')
@@ -331,6 +333,13 @@ export default function App() {
       document.head.appendChild(styleNode)
     }
   }, [])
+
+  // Kembalikan posisi scroll saat view berubah kembali ke 'grid'
+  useEffect(() => {
+    if (view === 'grid' && gridContainerRef.current) {
+      gridContainerRef.current.scrollTop = gridScrollRef.current
+    }
+  }, [view])
 
   useEffect(() => {
     if (selected && duration > 0) {
@@ -435,6 +444,10 @@ export default function App() {
   }
 
   function selectClip(clip) {
+    if (gridContainerRef.current) {
+      gridScrollRef.current = gridContainerRef.current.scrollTop
+    }
+
     setSelected(clip)
     setCompressedPath(null)
     setDuration(0)
@@ -479,8 +492,11 @@ export default function App() {
       setCurrentTime(0)
     }
 
-    setIsPlaying(false)
-    if (videoRef.current) videoRef.current.volume = volume
+    setIsPlaying(true)
+    if (videoRef.current) {
+      videoRef.current.volume = volume
+      videoRef.current.play()
+    }
   }
 
   function handleTimeUpdate() {
@@ -782,7 +798,7 @@ export default function App() {
               onClick={() => { setActiveFolder(gf.name); setSelected(null); setIsSelectMode(false); setSelectedPaths([]); setView('grid') }}
               style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === gf.name && view === 'grid' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === gf.name && view === 'grid' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === gf.name && view === 'grid' ? '#fff' : '#999' }}
             >
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🎮 {gf.name}</span>
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}> {gf.name}</span>
               <span style={{ fontSize: 11, color: '#555', marginLeft: 6, flexShrink: 0 }}>{gf.files.length}</span>
             </div>
           ))}
@@ -854,7 +870,11 @@ export default function App() {
 
         {/* Grid View */}
         {view === 'grid' && (
-          <div className="modern-scroll" style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+          <div 
+            ref={gridContainerRef} // 🛠️ PASANG REF DI SINI
+            className="modern-scroll" 
+            style={{ flex: 1, overflowY: 'auto', padding: 16 }}
+          >
             {activeClips.length === 0 ? (
               <div style={{ color: '#444', textAlign: 'center', marginTop: 80 }}>
                 <div style={{ fontSize: 48 }}>🎬</div>
