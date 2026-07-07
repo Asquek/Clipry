@@ -236,14 +236,6 @@ ipcMain.handle('start-drag', (event, filePath) => {
     icon: fs.existsSync(iconPath) ? iconPath : path.join(__dirname, 'public', 'vite.svg')
   })
 
-  setTimeout(() => {
-    try {
-      if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath)
-    } catch (err) {
-      console.error("Gagal membersihkan file kompresi:", err)
-    }
-  }, 3000)
-
   return true
 })
 
@@ -263,4 +255,16 @@ ipcMain.handle('delete-videos', async (_, filePaths) => {
   }
   if (errors.length > 0) throw new Error(errors.join('\n'))
   return deletedCount
+})
+
+app.on('before-quit', () => {
+  const os = require('os')
+  const tempDir = os.tmpdir()
+  try {
+    fs.readdirSync(tempDir)
+      .filter(f => f.startsWith('clipry_dist_'))
+      .forEach(f => fs.unlinkSync(path.join(tempDir, f)))
+  } catch (err) {
+    console.error('Gagal cleanup temp:', err)
+  }
 })

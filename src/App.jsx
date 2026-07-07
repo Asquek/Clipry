@@ -265,6 +265,9 @@ export default function App() {
   const [cardWidth, setCardWidth] = useState(230)
 
   const videoRef = useRef(null)
+  const audioCtxRef = useRef(null)
+  const gainNodeRef = useRef(null)
+  const sourceRef = useRef(null)
 
   useEffect(() => {
     const savedFolder = localStorage.getItem('clipry_saved_folder')
@@ -414,20 +417,48 @@ export default function App() {
     const nextMute = !isMuted
     videoRef.current.muted = nextMute
     setIsMuted(nextMute)
+    
+    if (gainNodeRef.current) {
+      // Jika di-mute set gain ke 0, jika di-unmute kembalikan ke nilai state volume
+      gainNodeRef.current.gain.value = nextMute ? 0 : volume
+    }
   }
 
   function handleVolumeChange(e) {
-    const val = parseFloat(e.target.value)
+    const val = parseFloat(e.target.value) // Nilai dari slider (0 sampai 3)
     setVolume(val)
-    if (videoRef.current) {
-      videoRef.current.volume = val
-      if (val > 0 && isMuted) {
-        videoRef.current.muted = false
-        setIsMuted(false)
-      } else if (val === 0 && !isMuted) {
-        videoRef.current.muted = true
-        setIsMuted(true)
-      }
+    
+    if (!videoRef.current) return
+
+    // Inisialisasi Web Audio API saat pertama kali slider digerakkan (Lazy Init)
+    if (!audioCtxRef.current) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext
+      const ctx = new AudioContext()
+      const gainNode = ctx.createGain()
+      
+      // Hubungkan video ke Audio Context
+      const source = ctx.createMediaElementSource(videoRef.current)
+      source.connect(gainNode)
+      gainNode.connect(ctx.destination)
+      
+      // Simpan ke Ref agar tidak ter-reset saat re-render
+      audioCtxRef.current = ctx
+      gainNodeRef.current = gainNode
+      sourceRef.current = source
+    }
+
+    // Atur amplifikasi suara lewat Gain Node (bukan lewat video.volume standar lagi)
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = val // Nilai 1 = normal, 2 = 200%, 3 = 300%
+    }
+
+    // Sinkronisasi status mute
+    if (val > 0 && isMuted) {
+      videoRef.current.muted = false
+      setIsMuted(false)
+    } else if (val === 0 && !isMuted) {
+      videoRef.current.muted = true
+      setIsMuted(true)
     }
   }
 
@@ -468,7 +499,17 @@ export default function App() {
     if (!confirm(confirmMsg)) return
 
     try {
-      setStatus('Deleting physical files...')
+      // 🛠️ LANGKAH KRUSIAL: Lepas lock file dengan mematikan video player jika file yang sedang dibuka ingin dihapus
+      if (selected && pathsToDelete.includes(selected.path)) {
+        setIsPlaying(false);
+        if (videoRef.current) {
+          videoRef.current.pause();
+          videoRef.current.src = ""; // 🧹 Kosongkan src untuk melepaskan locked resource di Windows
+          videoRef.current.load();
+        }
+      }
+
+      setStatus('Deleting physical files...');
       await window.api.deleteVideos(pathsToDelete)
       pathsToDelete.forEach(p => localStorage.removeItem(`trim_${p}`))
       
@@ -476,6 +517,7 @@ export default function App() {
       setSelectedPaths([])
       setIsSelectMode(false)
       setSelected(null)
+      setCompressedPath(null) // Ikut bersihkan path hasil kompresi temporer
       setView('grid')
 
       if (folder) {
@@ -593,7 +635,7 @@ export default function App() {
           {view === 'grid' && activeClips.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e1e24', padding: '4px 6px', borderRadius: 6, border: '1px solid #2d2d3d' }}>
-                <span style={{ fontSize: 11, color: '#aaa', marginRight: 4, marginLeft: 2 }}>Size:</span>
+                <span style={{ fontSize: 11, color: '#aaa', marginRight: 4, marginLeft: 2 }}>Thumbnails Size:</span>
                 <button onClick={() => changeCardWidthPreset(160)} style={getBtnStyle(160)}>Small</button>
                 <button onClick={() => changeCardWidthPreset(230)} style={getBtnStyle(230)}>Medium</button>
                 <button onClick={() => changeCardWidthPreset(320)} style={getBtnStyle(320)}>Large</button>
@@ -701,7 +743,7 @@ export default function App() {
                   
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
                     <div>
-                      <div style={{ color: '#666', fontSize: 11, marginBottom: 3 }}>FILE NAME</div>
+                      <div style={{ color: '#666', fontSize: 11, marginBottom: 3 }}>TITLE</div>
                       {isEditingName ? (
                         <div style={{ display: 'flex', gap: 6 }}>
                           <input
@@ -712,7 +754,6 @@ export default function App() {
                             autoFocus
                             style={{ flex: 1, background: '#2a2a2a', color: '#fff', border: '1px solid #5865F2', borderRadius: 4, padding: '4px 8px', fontSize: 13 }}
                           />
-                          <button onClick={handleRenameSubmit} style={{ background: '#23a559', color: '#fff', border: 'none', borderRadius: 4, padding: '0 8px', cursor: 'pointer' }}>💾</button>
                         </div>
                       ) : (
                         <div 
@@ -721,13 +762,12 @@ export default function App() {
                           title="Click to change file name"
                         >
                           <span style={{ wordBreak: 'break-all' }}>{selected.name}</span>
-                          <span style={{ color: '#666', fontSize: 12 }}>✏️</span>
                         </div>
                       )}
                     </div>
 
                     <div>
-                      <div style={{ color: '#666', fontSize: 11, marginBottom: 2 }}>DATE MODIFIED</div>
+                      <div style={{ color: '#666', fontSize: 11, marginBottom: 2 }}>DATE</div>
                       <div style={{ color: '#aaa', fontWeight: 500 }}>{formatDate(selected.mtime)}</div>
                     </div>
 
@@ -741,7 +781,7 @@ export default function App() {
                 {/* Panel Discord Compressor */}
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>🚀</span> Discord Share
+                    <span>🚀</span> COMPRESS
                   </div>
                   <div style={{ fontSize: 11, color: '#666', marginBottom: 14 }}>
                     Automatically compress video file size to under 10MB target.
@@ -775,8 +815,8 @@ export default function App() {
                       onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(35, 165, 89, 0.15)'}
                     >
                       <div style={{ fontSize: 24, marginBottom: 4 }}>🔥</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: '#23a559' }}>READY TO SHARE!</div>
-                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold this box, then drag it directly into Discord</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#23a559' }}>READY TO DRAG & DROP</div>
+                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold this box, then drag it directly anywhere</div>
                     </div>
                   )}
                 </div>
@@ -789,7 +829,7 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>✂️</span> Timeline Editor (Trim)
+                    <span>✂️</span> Timeline Editor
                   </div>
                   
                   <button 
@@ -804,7 +844,10 @@ export default function App() {
                       {isMuted || volume === 0 ? '🔇' : '🔊'}
                     </button>
                     <input 
-                      type="range" min="0" max="1" step="0.05"
+                      type="range" 
+                      min="0" 
+                      max="3" // 👈 Kita naikkan batas max dari "1" menjadi "3" (Amplifikasi hingga 300%)
+                      step="0.1" // 👈 Naik turunnya per 10% agar lebih halus saat digeser
                       value={isMuted ? 0 : volume}
                       onChange={handleVolumeChange}
                       style={{ width: 70, height: 4, cursor: 'pointer', accentColor: '#5865F2', background: '#444' }}
