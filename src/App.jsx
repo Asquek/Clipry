@@ -5,7 +5,6 @@ function formatSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-// 🛠️ PERBAIKAN DI SINI: Memisahkan Tanggal dan Jam agar formatnya presisi (Contoh: 09 Jun 2026, 15:30)
 function formatDate(ms) {
   const dateObj = new Date(ms)
   
@@ -30,10 +29,8 @@ function formatTime(sec) {
   return `${m}:${s}`
 }
 
-// Nilai standar 1 frame pada video 60fps (1 / 60 = ~0.0166 detik)
 const FRAME_TIME = 1 / 60 
 
-// Konfigurasi Default Hotkey bawaan aplikasi
 const DEFAULT_HOTKEYS = {
   playPause: 'Space',
   zoomIn: 'Equal',       
@@ -289,6 +286,15 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false)
   const [newNameInput, setNewNameInput] = useState('')
   const [compressedPath, setCompressedPath] = useState(null)
+  const [proklamasiPath, setProklamasiPath] = useState(null)
+  const [proklamasiProcessing, setProklamasiProcessing] = useState(false)
+
+  // 🛠️ PROGRESS STATE BARU
+  const [progressPercent, setProgressPercent] = useState(0)
+
+  // Compress target: 10 | 25 | 50 | custom (MB)
+  const [compressTarget, setCompressTarget] = useState(10)
+  const [customSizeMB, setCustomSizeMB] = useState('')
 
   const [isSelectMode, setIsSelectMode] = useState(false)
   const [selectedPaths, setSelectedPaths] = useState([])
@@ -312,7 +318,6 @@ export default function App() {
     return localStorage.getItem('clipry_sort_by') || 'date-desc'
   })
 
-  // Ref untuk mengunci koordinat scroll grid
   const gridScrollRef = useRef(0)
   const gridContainerRef = useRef(null)
 
@@ -330,6 +335,13 @@ export default function App() {
     const savedWidth = localStorage.getItem('clipry_card_width')
     if (savedWidth) {
       setCardWidth(parseInt(savedWidth, 10))
+    }
+
+    // 🛠️ MENERIMA PROGRES DARI ELECTRON BACKEND
+    if (window.api.onConversionProgress) {
+      window.api.onConversionProgress((percent) => {
+        setProgressPercent(percent)
+      })
     }
     
     const styleId = 'clipry-modern-scrollbar'
@@ -363,7 +375,6 @@ export default function App() {
     }
   }, [trimStart, trimEnd, selected, duration])
 
-  // HOTKEYS INTERCEPTION RADAR
   useEffect(() => {
     if (view !== 'player' || !videoRef.current || isEditingName) return
 
@@ -414,7 +425,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [view, hotkeys, trimStart, trimEnd, isPlaying, isEditingName])
 
-  // Mengunci Posisi Scroll sewaktu keluar dari Player
   useEffect(() => {
     if (view === 'grid' && gridContainerRef.current) {
       gridContainerRef.current.scrollTop = gridScrollRef.current
@@ -463,6 +473,8 @@ export default function App() {
 
     setSelected(clip)
     setCompressedPath(null)
+    setProklamasiPath(null)
+    setProgressPercent(0)
     setDuration(0)
     setZoomLevel(1)
     setPanOffset({ x: 0, y: 0 })
@@ -620,28 +632,52 @@ export default function App() {
 
   async function doCompress() {
     if (!selected) return
+    const targetMB = compressTarget === 'custom' ? parseFloat(customSizeMB) : compressTarget
+    if (!targetMB || isNaN(targetMB) || targetMB <= 0) {
+      setStatus('❌ Please enter a valid target size (MB)')
+      return
+    }
     setCompressing(true)
     setCompressedPath(null)
-    setStatus('Compressing... (including trimmed parts)')
+    setProgressPercent(0)
+    setStatus(`Compressing to ~${targetMB}MB...`)
     try {
       const ext = selected.name.split('.').pop()
       const baseName = selected.name.replace(`.${ext}`, '')
-      
-      const targetName = `${baseName}_discord.mp4`
-      const absoluteTempPath = await window.api.compressVideoWithTrim(selected.path, targetName, trimStart, trimEnd)
-      
+      const targetName = `${baseName}_${targetMB}mb.mp4`
+      const absoluteTempPath = await window.api.compressVideoWithTrim(selected.path, targetName, trimStart, trimEnd, targetMB)
       setCompressedPath(absoluteTempPath)
-      setStatus(`✅ Compression Complete! Drag the box below to Discord.`)
+      setStatus(`✅ Done! Target ~${targetMB}MB. Drag the box below.`)
     } catch (err) {
       setStatus(`❌ Error: ${err}`)
     }
     setCompressing(false)
   }
 
-  function handleNativeDragStart(e) {
+  // 🛠️ FUNGSI BARU DIUBAH MENJADI DO PROKLAMASI
+  async function doProklamasi() {
+    if (!selected) return
+    setProklamasiProcessing(true)
+    setProklamasiPath(null)
+    setProgressPercent(0)
+    setStatus('Processing Proklamasi compression...')
+    try {
+      const ext = selected.name.split('.').pop()
+      const baseName = selected.name.replace(`.${ext}`, '')
+      const targetName = `${baseName}_proklamasi.mp4`
+      const absoluteTempPath = await window.api.proklamasiVideo(selected.path, targetName, trimStart, trimEnd)
+      setProklamasiPath(absoluteTempPath)
+      setStatus('✅ Proklamasi compress successful! Ready to drag.')
+    } catch (err) {
+      setStatus(`❌ Proklamasi Error: ${err}`)
+    }
+    setProklamasiProcessing(false)
+  }
+
+  function handleNativeDragStart(e, filePath) {
     e.preventDefault()
-    if (compressedPath) {
-      window.api.startDrag(compressedPath)
+    if (filePath) {
+      window.api.startDrag(filePath)
     }
   }
 
@@ -753,7 +789,6 @@ export default function App() {
     localStorage.setItem('clipry_hotkeys', JSON.stringify(DEFAULT_HOTKEYS))
   }
 
-  // Engine Sortir Video Pustaka
   const rawClips = activeFolder === 'All Videos'
     ? gamefolders.reduce((acc, folder) => [...acc, ...folder.files], [])
     : gamefolders.find(f => f.name === activeFolder)?.files || []
@@ -826,7 +861,8 @@ export default function App() {
               onClick={() => { setActiveFolder(gf.name); setSelected(null); setIsSelectMode(false); setSelectedPaths([]); setView('grid') }}
               style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === gf.name && view === 'grid' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === gf.name && view === 'grid' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === gf.name && view === 'grid' ? '#fff' : '#999' }}
             >
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🎮 {gf.name}</span>
+              {/* 3. MENGHILANGKAN EMOJI GAMEPAD */}
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gf.name}</span>
               <span style={{ fontSize: 11, color: '#555', marginLeft: 6, flexShrink: 0 }}>{gf.files.length}</span>
             </div>
           ))}
@@ -1115,18 +1151,86 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* 5. UBAH NAMA TAB JADI COMPRESS TRIM & UI KE BAHASA INGGRIS */}
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>🚀</span> COMPRESS
+                    <span>🚀</span> COMPRESS TRIM
                   </div>
-                  <div style={{ fontSize: 11, color: '#666', marginBottom: 14 }}>
-                    Automatically compress video file size to under 10MB target.
+                  <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>
+                    Target size for the output video file (trimmed section):
                   </div>
-                  <button onClick={doCompress} disabled={compressing} style={{ width: '100%', padding: '10px', background: compressing ? '#444' : '#23a559', color: '#fff', border: 'none', borderRadius: 6, cursor: compressing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
-                    {compressing ? 'Compressing...' : 'Compress Trimmed Section'}
+
+                  {/* Pilihan target size */}
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                    {[10, 25, 50].map(mb => (
+                      <button
+                        key={mb}
+                        onClick={() => setCompressTarget(mb)}
+                        style={{
+                          flex: 1,
+                          padding: '6px 4px',
+                          background: compressTarget === mb ? '#5865F2' : '#2a2a32',
+                          border: compressTarget === mb ? '1px solid #5865F2' : '1px solid #3d3d4d',
+                          color: '#fff',
+                          borderRadius: 4,
+                          fontSize: 12,
+                          fontWeight: compressTarget === mb ? 700 : 400,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s'
+                        }}
+                      >
+                        {mb}MB
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setCompressTarget('custom')}
+                      style={{
+                        flex: 1,
+                        padding: '6px 4px',
+                        background: compressTarget === 'custom' ? '#5865F2' : '#2a2a32',
+                        border: compressTarget === 'custom' ? '1px solid #5865F2' : '1px solid #3d3d4d',
+                        color: '#fff',
+                        borderRadius: 4,
+                        fontSize: 12,
+                        fontWeight: compressTarget === 'custom' ? 700 : 400,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s'
+                      }}
+                    >
+                      Custom
+                    </button>
+                  </div>
+
+                  {/* Input custom MB */}
+                  {compressTarget === 'custom' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                      <input
+                        type="number"
+                        min="1"
+                        max="500"
+                        placeholder="Size (MB)"
+                        value={customSizeMB}
+                        onChange={e => setCustomSizeMB(e.target.value)}
+                        style={{
+                          flex: 1,
+                          background: '#2a2a2a',
+                          color: '#fff',
+                          border: '1px solid #5865F2',
+                          borderRadius: 4,
+                          padding: '5px 8px',
+                          fontSize: 12
+                        }}
+                      />
+                      <span style={{ fontSize: 11, color: '#666' }}>MB</span>
+                    </div>
+                  )}
+
+                  {/* 2. INDIKATOR PROGRESS */}
+                  <button onClick={doCompress} disabled={compressing || proklamasiProcessing} style={{ width: '100%', padding: '9px', background: compressing ? '#444' : '#23a559', color: '#fff', border: 'none', borderRadius: 6, cursor: compressing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+                    {compressing ? `Compressing (${progressPercent}%)` : `Compress → ~${compressTarget === 'custom' ? (customSizeMB || '?') : compressTarget}MB`}
                   </button>
-                  
-                  {status && (
+
+                  {status && !proklamasiProcessing && (
                     <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 4, fontSize: 12, background: status.startsWith('✅') ? 'rgba(76,175,80,0.1)' : status.startsWith('❌') ? 'rgba(244,67,54,0.1)' : 'rgba(255,255,255,0.05)', color: status.startsWith('✅') ? '#4caf50' : status.startsWith('❌') ? '#f44336' : '#aaa', border: `1px solid ${status.startsWith('✅') ? '#4caf50' : status.startsWith('❌') ? '#f44336' : '#333'}` }}>
                       {status}
                     </div>
@@ -1135,24 +1239,49 @@ export default function App() {
                   {compressedPath && (
                     <div
                       draggable="true"
-                      onDragStart={handleNativeDragStart}
-                      style={{
-                        marginTop: 14,
-                        padding: '16px',
-                        background: 'rgba(35, 165, 89, 0.15)',
-                        border: '2px dashed #23a559',
-                        borderRadius: 6,
-                        textAlign: 'center',
-                        cursor: 'grab',
-                        userSelect: 'none',
-                        transition: 'background 0.2s'
-                      }}
+                      onDragStart={(e) => handleNativeDragStart(e, compressedPath)}
+                      style={{ marginTop: 14, padding: '16px', background: 'rgba(35, 165, 89, 0.15)', border: '2px dashed #23a559', borderRadius: 6, textAlign: 'center', cursor: 'grab', userSelect: 'none', transition: 'background 0.2s' }}
                       onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(35, 165, 89, 0.25)'}
                       onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(35, 165, 89, 0.15)'}
                     >
                       <div style={{ fontSize: 24, marginBottom: 4 }}>🔥</div>
                       <div style={{ fontSize: 12, fontWeight: 700, color: '#23a559' }}>READY TO DRAG & DROP</div>
-                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold this box, then drag it directly anywhere</div>
+                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold → drag to Discord or anywhere</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 6. UBAH NAMA TAB JADI PROKLAMASI COMPRESS & 7. FIX KETERANGAN FITUR */}
+                <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>📼</span> PROKLAMASI COMPRESS
+                  </div>
+                  <div style={{ fontSize: 11, color: '#666', marginBottom: 12 }}>
+                    Compress the video heavily down to 144p resolution, 10fps framerate, and extreme low bitrate while keeping original colors.
+                  </div>
+                  
+                  {/* 2. INDIKATOR PROGRESS PROKLAMASI */}
+                  <button onClick={doProklamasi} disabled={proklamasiProcessing || compressing} style={{ width: '100%', padding: '9px', background: proklamasiProcessing ? '#444' : '#7c4f00', color: '#ffcc70', border: '1px solid #a06a00', borderRadius: 6, cursor: proklamasiProcessing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700 }}>
+                    {proklamasiProcessing ? `Processing (${progressPercent}%)` : 'Activate Proklamasi Compress'}
+                  </button>
+
+                  {status && proklamasiProcessing && (
+                    <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 4, fontSize: 12, background: 'rgba(255,255,255,0.05)', color: '#aaa', border: '1px solid #333' }}>
+                      {status}
+                    </div>
+                  )}
+
+                  {proklamasiPath && (
+                    <div
+                      draggable="true"
+                      onDragStart={(e) => handleNativeDragStart(e, proklamasiPath)}
+                      style={{ marginTop: 14, padding: '16px', background: 'rgba(124, 79, 0, 0.2)', border: '2px dashed #a06a00', borderRadius: 6, textAlign: 'center', cursor: 'grab', userSelect: 'none', transition: 'background 0.2s' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124, 79, 0, 0.35)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(124, 79, 0, 0.2)'}
+                    >
+                      <div style={{ fontSize: 24, marginBottom: 4 }}>📼</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#ffcc70' }}>PROKLAMASI READY TO DRAG!</div>
+                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold → drag anywhere</div>
                     </div>
                   )}
                 </div>

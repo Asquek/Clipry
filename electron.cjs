@@ -43,11 +43,11 @@ app.whenReady().then(() => {
     autoUpdater.checkForUpdatesAndNotify()
 
     autoUpdater.on('update-available', () => {
-      mainWindow.webContents.send('update-status', 'Update tersedia, sedang download...')
+      mainWindow.webContents.send('update-status', 'Update available, downloading...')
     })
 
     autoUpdater.on('update-downloaded', () => {
-      mainWindow.webContents.send('update-status', 'Update siap! Restart untuk install.')
+      mainWindow.webContents.send('update-status', 'Update ready! Restart to install.')
     })
 
     autoUpdater.on('error', (err) => {
@@ -196,19 +196,21 @@ ipcMain.handle('rename-video', async (_, oldPath, newName) => {
   return { name: finalizedName, path: newPath, size: stats.size, mtime: stats.mtimeMs }
 })
 
-ipcMain.handle('compress-video-with-trim', async (_, input, outputName, start, end) => {
+ipcMain.handle('compress-video-with-trim', async (event, input, outputName, start, end, targetSizeMB = 9) => {
   return new Promise((resolve, reject) => {
     const os = require('os')
     const tempDir = os.tmpdir()
     const uniqueOutputName = `clipry_dist_${Date.now()}_${outputName}`
     const absoluteOutputPath = path.join(tempDir, uniqueOutputName)
     const trimDuration = end - start
-    const targetSizeBits = 8.5 * 1024 * 1024 * 8
+    
+    const targetSizeBits = targetSizeMB * 0.95 * 1024 * 1024 * 8
     const audioBitrateBits = 128 * 1024 * trimDuration
     const videoBitrateBits = targetSizeBits - audioBitrateBits
     let calcVideoBitrateKbps = Math.floor((videoBitrateBits / trimDuration) / 1024)
-    if (calcVideoBitrateKbps > 4000) calcVideoBitrateKbps = 4000
-    if (calcVideoBitrateKbps < 200) calcVideoBitrateKbps = 200
+    if (calcVideoBitrateKbps > 8000) calcVideoBitrateKbps = 8000
+    if (calcVideoBitrateKbps < 100) calcVideoBitrateKbps = 100
+
     ffmpeg(input)
       .setStartTime(start)
       .setDuration(trimDuration)
@@ -217,7 +219,63 @@ ipcMain.handle('compress-video-with-trim', async (_, input, outputName, start, e
       .audioBitrate(128)
       .outputOptions(['-map_metadata -1', '-pix_fmt yuv420p', '-movflags +faststart'])
       .output(absoluteOutputPath)
-      .on('end', () => resolve(absoluteOutputPath))
+      .on('progress', (progress) => {
+        const timeToken = progress.timemark.split(':')
+        const currentSec = parseFloat(timeToken[0]) * 3600 + parseFloat(timeToken[1]) * 60 + parseFloat(timeToken[2])
+        const percent = Math.min(99, Math.floor((currentSec / trimDuration) * 100))
+        event.sender.send('conversion-progress', percent)
+      })
+      .on('end', () => {
+        event.sender.send('conversion-progress', 100)
+        resolve(absoluteOutputPath)
+      })
+      .on('error', (err) => reject(err.message))
+      .run()
+  })
+})
+
+// 🛠️ MERUBAH NAMA HANDLER, BITRATE 50K & WARNA ORIGINAL 144P 10FPS
+ipcMain.handle('proklamasi-video', async (event, input, outputName, start, end) => {
+  return new Promise((resolve, reject) => {
+    const os = require('os')
+    const tempDir = os.tmpdir()
+    const uniqueOutputName = `clipry_proklamasi_${Date.now()}_${outputName}`
+    const absoluteOutputPath = path.join(tempDir, uniqueOutputName)
+    const trimDuration = end - start
+
+    const vfChain = [
+      'scale=256:144',   
+      'fps=10'           
+    ].join(',')
+
+    ffmpeg(input)
+      .setStartTime(start)
+      .setDuration(trimDuration)
+      .videoFilters(vfChain)
+      .videoCodec('libx264')
+      .videoBitrate(50) // 1. Bitrate diubah ke 50k
+      .outputOptions([
+        '-maxrate 60k',
+        '-bufsize 120k',
+        '-c:a aac',
+        '-ac 1',                                  
+        '-b:a 12k',                               
+        '-map_metadata -1', 
+        '-pix_fmt yuv420p', 
+        '-movflags +faststart', 
+        '-preset fast'
+      ])
+      .output(absoluteOutputPath)
+      .on('progress', (progress) => {
+        const timeToken = progress.timemark.split(':')
+        const currentSec = parseFloat(timeToken[0]) * 3600 + parseFloat(timeToken[1]) * 60 + parseFloat(timeToken[2])
+        const percent = Math.min(99, Math.floor((currentSec / trimDuration) * 100))
+        event.sender.send('conversion-progress', percent)
+      })
+      .on('end', () => {
+        event.sender.send('conversion-progress', 100)
+        resolve(absoluteOutputPath)
+      })
       .on('error', (err) => reject(err.message))
       .run()
   })
@@ -250,7 +308,7 @@ ipcMain.handle('delete-videos', async (_, filePaths) => {
         deletedCount++
       }
     } catch (err) {
-      errors.push(`Gagal menghapus ${path.basename(filePath)}: ${err.message}`)
+      errors.push(`Failed to delete ${path.basename(filePath)}: ${err.message}`)
     }
   }
   if (errors.length > 0) throw new Error(errors.join('\n'))
@@ -262,9 +320,9 @@ app.on('before-quit', () => {
   const tempDir = os.tmpdir()
   try {
     fs.readdirSync(tempDir)
-      .filter(f => f.startsWith('clipry_dist_'))
+      .filter(f => f.startsWith('clipry_dist_') || f.startsWith('clipry_proklamasi_'))
       .forEach(f => fs.unlinkSync(path.join(tempDir, f)))
   } catch (err) {
-    console.error('Gagal cleanup temp:', err)
+    console.error('Failed to cleanup temp:', err)
   }
 })
