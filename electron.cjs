@@ -25,6 +25,12 @@ function createWindow() {
   })
   mainWindow.setMenuBarVisibility(false)
 
+  mainWindow.on('app-command', (e, cmd) => {
+    if (cmd === 'browser-backward') {
+      mainWindow.webContents.send('mouse-back-triggered')
+    }
+  })
+
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(__dirname, 'dist/index.html'))
   } else {
@@ -234,7 +240,6 @@ ipcMain.handle('compress-video-with-trim', async (event, input, outputName, star
   })
 })
 
-// 🛠️ MERUBAH NAMA HANDLER, BITRATE 50K & WARNA ORIGINAL 144P 10FPS
 ipcMain.handle('proklamasi-video', async (event, input, outputName, start, end) => {
   return new Promise((resolve, reject) => {
     const os = require('os')
@@ -253,7 +258,7 @@ ipcMain.handle('proklamasi-video', async (event, input, outputName, start, end) 
       .setDuration(trimDuration)
       .videoFilters(vfChain)
       .videoCodec('libx264')
-      .videoBitrate(50) // 1. Bitrate diubah ke 50k
+      .videoBitrate(50) 
       .outputOptions([
         '-maxrate 60k',
         '-bufsize 120k',

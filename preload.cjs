@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('api', {
   restartToUpdate: () => ipcRenderer.invoke('restart-to-update'),
   onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_, msg) => cb(msg)),
   proklamasiVideo: (input, outputName, start, end) => ipcRenderer.invoke('proklamasi-video', input, outputName, start, end),
-  onConversionProgress: (cb) => ipcRenderer.on('conversion-progress', (_, progress) => cb(progress))
+  onConversionProgress: (cb) => ipcRenderer.on('conversion-progress', (_, progress) => cb(progress)),
+  onMouseBack: (cb) => ipcRenderer.on('mouse-back-triggered', () => cb()),
 })

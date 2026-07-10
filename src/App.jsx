@@ -7,19 +7,16 @@ function formatSize(bytes) {
 
 function formatDate(ms) {
   const dateObj = new Date(ms)
-  
   const dateStr = dateObj.toLocaleDateString('en-US', { 
     day: '2-digit', 
     month: 'short', 
     year: 'numeric' 
   })
-  
   const timeStr = dateObj.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false
   })
-
   return `${dateStr}, ${timeStr}`
 }
 
@@ -289,7 +286,11 @@ export default function App() {
   const [proklamasiPath, setProklamasiPath] = useState(null)
   const [proklamasiProcessing, setProklamasiProcessing] = useState(false)
 
-  // 🛠️ PROGRESS STATE BARU
+  // NOTIFIKASI STATUS PER PANEL
+  const [compressStatus, setCompressStatus] = useState(null)
+  const [proklamasiStatus, setProklamasiStatus] = useState(null)
+
+  // PROGRESS STATE
   const [progressPercent, setProgressPercent] = useState(0)
 
   // Compress target: 10 | 25 | 50 | custom (MB)
@@ -305,6 +306,11 @@ export default function App() {
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const panStart = useRef({ x: 0, y: 0 })
+
+  // MOUSE HOVER SCROLL ZOOM SWITCH STATE
+  const [scrollZoomEnabled, setScrollZoomEnabled] = useState(() => {
+    return localStorage.getItem('clipry_scroll_zoom') === 'true'
+  })
 
   // Hotkeys States
   const [hotkeys, setHotkeys] = useState(() => {
@@ -327,6 +333,34 @@ export default function App() {
   const gainNodeRef = useRef(null)
   const sourceRef = useRef(null)
 
+  // Engine Pustaka Klip Video
+  const rawClips = activeFolder === 'All Videos'
+    ? gamefolders.reduce((acc, folder) => [...acc, ...folder.files], [])
+    : gamefolders.find(f => f.name === activeFolder)?.files || []
+
+  const activeClips = [...rawClips].sort((a, b) => {
+    if (sortBy === 'date-desc') return b.mtime - a.mtime       
+    if (sortBy === 'date-asc') return a.mtime - b.mtime        
+    if (sortBy === 'size-desc') return b.size - a.size         
+    if (sortBy === 'size-asc') return a.size - b.size          
+    if (sortBy === 'name-asc') return a.name.localeCompare(b.name) 
+    return 0
+  })
+
+  // EVENT HANDLER MOUSE BUTTON 4 (BACK)
+  useEffect(() => {
+    if (window.api && typeof window.api.onMouseBack === 'function') {
+      window.api.onMouseBack(() => {
+        setView((currentView) => {
+          if (currentView !== 'grid') {
+            return 'grid'
+          }
+          return currentView
+        })
+      })
+    }
+  }, [])
+
   useEffect(() => {
     const savedFolder = localStorage.getItem('clipry_saved_folder')
     if (savedFolder) {
@@ -337,8 +371,7 @@ export default function App() {
       setCardWidth(parseInt(savedWidth, 10))
     }
 
-    // 🛠️ MENERIMA PROGRES DARI ELECTRON BACKEND
-    if (window.api.onConversionProgress) {
+    if (window.api && typeof window.api.onConversionProgress === 'function') {
       window.api.onConversionProgress((percent) => {
         setProgressPercent(percent)
       })
@@ -431,6 +464,36 @@ export default function App() {
     }
   }, [view])
 
+  function handleWheelZoom(e) {
+    if (!scrollZoomEnabled) return
+    e.preventDefault()
+    
+    setZoomLevel(prev => {
+      let next
+      if (e.deltaY < 0) {
+        next = Math.min(3, prev + 0.1)
+      } else {
+        next = Math.max(1, prev - 0.1)
+      }
+      if (next === 1) setPanOffset({ x: 0, y: 0 })
+      return next
+    })
+  }
+
+  // 🛠️ PERBAIKAN LOGIKA: Membuat navigasi mentok (tidak ngeloop)
+  function navigateVideo(direction) {
+    if (activeClips.length <= 1 || !selected) return
+    const currentIndex = activeClips.findIndex(clip => clip.path === selected.path)
+    if (currentIndex === -1) return
+
+    let nextIndex = currentIndex + direction
+    
+    // Jika indeks di luar batas, kunci posisi agar tidak berputar (ngeloop)
+    if (nextIndex < 0 || nextIndex >= activeClips.length) return
+
+    selectClip(activeClips[nextIndex])
+  }
+
   async function loadFolderData(folderPath) {
     setFolder(folderPath)
     const folders = await window.api.scanFolder(folderPath)
@@ -474,6 +537,8 @@ export default function App() {
     setSelected(clip)
     setCompressedPath(null)
     setProklamasiPath(null)
+    setCompressStatus(null)
+    setProklamasiStatus(null)
     setProgressPercent(0)
     setDuration(0)
     setZoomLevel(1)
@@ -634,42 +699,41 @@ export default function App() {
     if (!selected) return
     const targetMB = compressTarget === 'custom' ? parseFloat(customSizeMB) : compressTarget
     if (!targetMB || isNaN(targetMB) || targetMB <= 0) {
-      setStatus('❌ Please enter a valid target size (MB)')
+      setCompressStatus('❌ Please enter a valid target size (MB)')
       return
     }
     setCompressing(true)
     setCompressedPath(null)
     setProgressPercent(0)
-    setStatus(`Compressing to ~${targetMB}MB...`)
+    setCompressStatus(`Compressing to ~${targetMB}MB...`)
     try {
       const ext = selected.name.split('.').pop()
       const baseName = selected.name.replace(`.${ext}`, '')
       const targetName = `${baseName}_${targetMB}mb.mp4`
       const absoluteTempPath = await window.api.compressVideoWithTrim(selected.path, targetName, trimStart, trimEnd, targetMB)
       setCompressedPath(absoluteTempPath)
-      setStatus(`✅ Done! Target ~${targetMB}MB. Drag the box below.`)
+      setCompressStatus(`✅ Done! Target ~${targetMB}MB. Drag the box below.`)
     } catch (err) {
-      setStatus(`❌ Error: ${err}`)
+      setCompressStatus(`❌ Error: ${err}`)
     }
     setCompressing(false)
   }
 
-  // 🛠️ FUNGSI BARU DIUBAH MENJADI DO PROKLAMASI
   async function doProklamasi() {
     if (!selected) return
     setProklamasiProcessing(true)
     setProklamasiPath(null)
     setProgressPercent(0)
-    setStatus('Processing Proklamasi compression...')
+    setProklamasiStatus('Processing Proklamasi compression...')
     try {
       const ext = selected.name.split('.').pop()
       const baseName = selected.name.replace(`.${ext}`, '')
       const targetName = `${baseName}_proklamasi.mp4`
       const absoluteTempPath = await window.api.proklamasiVideo(selected.path, targetName, trimStart, trimEnd)
       setProklamasiPath(absoluteTempPath)
-      setStatus('✅ Proklamasi compress successful! Ready to drag.')
+      setProklamasiStatus('✅ Proklamasi compress successful! Ready to drag.')
     } catch (err) {
-      setStatus(`❌ Proklamasi Error: ${err}`)
+      setProklamasiStatus(`❌ Proklamasi Error: ${err}`)
     }
     setProklamasiProcessing(false)
   }
@@ -737,12 +801,11 @@ export default function App() {
       return
     }
     try {
-      if (window.api.renameVideo) {
+      if (window.api && typeof window.api.renameVideo === 'function') {
         const updatedClip = await window.api.renameVideo(selected.path, newNameInput.trim())
         setSelected(updatedClip)
       } else {
         setSelected(prev => ({ ...prev, name: newNameInput.trim() }))
-        setStatus('⚠️ Physical rename function hasn\'t been handled in electron.cjs')
       }
       setIsEditingName(false)
       const folders = await window.api.scanFolder(folder)
@@ -784,23 +847,16 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleCapture, true)
   }, [recordingAction])
 
+  function toggleScrollZoomSwitch() {
+    const nextVal = !scrollZoomEnabled
+    setScrollZoomEnabled(nextVal)
+    localStorage.setItem('clipry_scroll_zoom', nextVal.toString())
+  }
+
   function resetHotkeysToDefault() {
     setHotkeys(DEFAULT_HOTKEYS)
     localStorage.setItem('clipry_hotkeys', JSON.stringify(DEFAULT_HOTKEYS))
   }
-
-  const rawClips = activeFolder === 'All Videos'
-    ? gamefolders.reduce((acc, folder) => [...acc, ...folder.files], [])
-    : gamefolders.find(f => f.name === activeFolder)?.files || []
-
-  const activeClips = [...rawClips].sort((a, b) => {
-    if (sortBy === 'date-desc') return b.mtime - a.mtime       
-    if (sortBy === 'date-asc') return a.mtime - b.mtime        
-    if (sortBy === 'size-desc') return b.size - a.size         
-    if (sortBy === 'size-asc') return a.size - b.size          
-    if (sortBy === 'name-asc') return a.name.localeCompare(b.name) 
-    return 0
-  })
 
   function handleSortChange(e) {
     const nextSort = e.target.value
@@ -861,7 +917,6 @@ export default function App() {
               onClick={() => { setActiveFolder(gf.name); setSelected(null); setIsSelectMode(false); setSelectedPaths([]); setView('grid') }}
               style={{ padding: '8px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: activeFolder === gf.name && view === 'grid' ? '#2a2a3a' : 'transparent', borderLeft: activeFolder === gf.name && view === 'grid' ? '3px solid #5865F2' : '3px solid transparent', color: activeFolder === gf.name && view === 'grid' ? '#fff' : '#999' }}
             >
-              {/* 3. MENGHILANGKAN EMOJI GAMEPAD */}
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gf.name}</span>
               <span style={{ fontSize: 11, color: '#555', marginLeft: 6, flexShrink: 0 }}>{gf.files.length}</span>
             </div>
@@ -968,7 +1023,7 @@ export default function App() {
             {activeClips.length === 0 ? (
               <div style={{ color: '#444', textAlign: 'center', marginTop: 80 }}>
                 <div style={{ fontSize: 48 }}>🎬</div>
-                <div style={{ marginTop: 8 }}>Select a game folder from the sidebar</div>
+                <div style={{ marginTop: 8 }}>Select a folder from the sidebar</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${cardWidth}px, 1fr))`, gap: 14 }}>
@@ -989,13 +1044,13 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab Pengaturan Hotkey */}
+        {/* Tab Pengaturan Hotkey & Zoom Switch */}
         {view === 'settings' && (
           <div className="modern-scroll" style={{ flex: 1, overflowY: 'auto', padding: '30px 40px' }}>
             <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, color: '#fff' }}>Keyboard Shortcuts</h2>
             <p style={{ fontSize: 13, color: '#aaa', marginBottom: 24 }}>Click any action button below, then tap a new key on your keyboard to assign a shortcut.</p>
             
-            <div style={{ background: '#161616', borderRadius: 8, border: '1px solid #2a2a2a', maxWidth: 650, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ background: '#161616', borderRadius: 8, border: '1px solid #2a2a2a', maxWidth: 650, display: 'flex', flexDirection: 'column', marginBottom: 30 }}>
               {[
                 { key: 'playPause', label: 'Play / Pause Video' },
                 { key: 'zoomIn', label: 'Zoom In (+)' },
@@ -1050,11 +1105,32 @@ export default function App() {
               ))}
             </div>
 
+            <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, color: '#fff' }}>Mouse Controls</h2>
+            <p style={{ fontSize: 13, color: '#aaa', marginBottom: 16 }}>Configure extra mouse interactive triggers.</p>
+            <div style={{ background: '#161616', borderRadius: 8, border: '1px solid #2a2a2a', maxWidth: 650, padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+              <div>
+                <div style={{ fontSize: 14, color: '#ddd', fontWeight: 600 }}>Enable Scroll Wheel Zooming</div>
+                <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>Allows you to zoom video in/out by scrolling mouse wheel while hovering over player.</div>
+              </div>
+              <div 
+                onClick={toggleScrollZoomSwitch}
+                style={{
+                  width: 44, height: 24, borderRadius: 12, background: scrollZoomEnabled ? '#23a559' : '#444',
+                  position: 'relative', cursor: 'pointer', transition: 'background 0.2s'
+                }}
+              >
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                  position: 'absolute', top: 3, left: scrollZoomEnabled ? 23 : 3, transition: 'left 0.2s'
+                }} />
+              </div>
+            </div>
+
             <button 
               onClick={resetHotkeysToDefault}
-              style={{ marginTop: 20, padding: '8px 16px', background: 'transparent', color: '#ff4d4d', border: '1px solid #ff4d4d', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+              style={{ padding: '8px 16px', background: 'transparent', color: '#ff4d4d', border: '1px solid #ff4d4d', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
             >
-              Reset to Defaults
+              Reset Shortcuts to Defaults
             </button>
           </div>
         )}
@@ -1072,6 +1148,7 @@ export default function App() {
                   onMouseMove={handleMouseMovePan}
                   onMouseUp={handleMouseUpPan}
                   onMouseLeave={handleMouseUpPan}
+                  onWheel={handleWheelZoom}
                   style={{ flex: 1, background: '#000', borderRadius: 8, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
                 >
                   <video
@@ -1098,6 +1175,24 @@ export default function App() {
               {/* SISI KANAN: Side Panel */}
               <div className="modern-scroll" style={{ width: 300, minWidth: 300, display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto' }}>
                 
+                {/* Baris Navigasi Previous & Next Video */}
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button 
+                    onClick={() => navigateVideo(-1)} // Ditukar ke -1 atau sebaliknya sesuai urutan list kamu
+                    disabled={activeClips.length <= 1 || activeClips.findIndex(clip => clip.path === selected.path) === 0}
+                    style={{ flex: 1, padding: '8px', background: '#2a2a32', border: '1px solid #3d3d4d', borderRadius: 6, color: '#fff', fontSize: 12, cursor: (activeClips.length <= 1 || activeClips.findIndex(clip => clip.path === selected.path) === 0) ? 'not-allowed' : 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                  >
+                    ◀ Next Clip
+                  </button>
+                  <button 
+                    onClick={() => navigateVideo(1)} // Ditukar ke 1
+                    disabled={activeClips.length <= 1 || activeClips.findIndex(clip => clip.path === selected.path) === activeClips.length - 1}
+                    style={{ flex: 1, padding: '8px', background: '#2a2a32', border: '1px solid #3d3d4d', borderRadius: 6, color: '#fff', fontSize: 12, cursor: (activeClips.length <= 1 || activeClips.findIndex(clip => clip.path === selected.path) === activeClips.length - 1) ? 'not-allowed' : 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                  >
+                    Prev Clip ▶
+                  </button>
+                </div>
+
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 14, color: '#ccc', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1151,16 +1246,15 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 5. UBAH NAMA TAB JADI COMPRESS TRIM & UI KE BAHASA INGGRIS */}
+                {/* 5. UBAH COMPRESS TRIM MENJADI COMPRESS */}
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>🚀</span> COMPRESS TRIM
+                    <span>🚀</span> COMPRESS
                   </div>
                   <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>
-                    Target size for the output video file (trimmed section):
+                    Compress the trimmed section to:
                   </div>
 
-                  {/* Pilihan target size */}
                   <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
                     {[10, 25, 50].map(mb => (
                       <button
@@ -1201,7 +1295,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Input custom MB */}
                   {compressTarget === 'custom' && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
                       <input
@@ -1225,14 +1318,14 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* 2. INDIKATOR PROGRESS */}
+                  {/* 3. UBAH TOMBOL MENJADI COMPRESS */}
                   <button onClick={doCompress} disabled={compressing || proklamasiProcessing} style={{ width: '100%', padding: '9px', background: compressing ? '#444' : '#23a559', color: '#fff', border: 'none', borderRadius: 6, cursor: compressing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
-                    {compressing ? `Compressing (${progressPercent}%)` : `Compress → ~${compressTarget === 'custom' ? (customSizeMB || '?') : compressTarget}MB`}
+                    {compressing ? `Compressing (${progressPercent}%)` : 'Compress'}
                   </button>
 
-                  {status && !proklamasiProcessing && (
-                    <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 4, fontSize: 12, background: status.startsWith('✅') ? 'rgba(76,175,80,0.1)' : status.startsWith('❌') ? 'rgba(244,67,54,0.1)' : 'rgba(255,255,255,0.05)', color: status.startsWith('✅') ? '#4caf50' : status.startsWith('❌') ? '#f44336' : '#aaa', border: `1px solid ${status.startsWith('✅') ? '#4caf50' : status.startsWith('❌') ? '#f44336' : '#333'}` }}>
-                      {status}
+                  {compressStatus && (
+                    <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 4, fontSize: 12, background: compressStatus.startsWith('✅') ? 'rgba(76,175,80,0.1)' : compressStatus.startsWith('❌') ? 'rgba(244,67,54,0.1)' : 'rgba(255,255,255,0.05)', color: compressStatus.startsWith('✅') ? '#4caf50' : compressStatus.startsWith('❌') ? '#f44336' : '#aaa', border: `1px solid ${compressStatus.startsWith('✅') ? '#4caf50' : compressStatus.startsWith('❌') ? '#f44336' : '#333'}` }}>
+                      {compressStatus}
                     </div>
                   )}
 
@@ -1246,28 +1339,35 @@ export default function App() {
                     >
                       <div style={{ fontSize: 24, marginBottom: 4 }}>🔥</div>
                       <div style={{ fontSize: 12, fontWeight: 700, color: '#23a559' }}>READY TO DRAG & DROP</div>
-                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold → drag to Discord or anywhere</div>
+                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold → drag anywhere</div>
                     </div>
                   )}
                 </div>
 
-                {/* 6. UBAH NAMA TAB JADI PROKLAMASI COMPRESS & 7. FIX KETERANGAN FITUR */}
+                {/* 4. MENYELARASKAN PROKLAMASI DENGAN PANEL COMPRESS */}
                 <div style={{ background: '#1a1a1a', borderRadius: 8, padding: 16, border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>📼</span> PROKLAMASI COMPRESS
                   </div>
+                  {/* 1. KETERANGAN PENDEK & TIDAK DETAIL */}
                   <div style={{ fontSize: 11, color: '#666', marginBottom: 12 }}>
-                    Compress the video heavily down to 144p resolution, 10fps framerate, and extreme low bitrate while keeping original colors.
+                    Compress the trimmed section heavily into low resolution and framerate.
                   </div>
                   
-                  {/* 2. INDIKATOR PROGRESS PROKLAMASI */}
-                  <button onClick={doProklamasi} disabled={proklamasiProcessing || compressing} style={{ width: '100%', padding: '9px', background: proklamasiProcessing ? '#444' : '#7c4f00', color: '#ffcc70', border: '1px solid #a06a00', borderRadius: 6, cursor: proklamasiProcessing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700 }}>
-                    {proklamasiProcessing ? `Processing (${progressPercent}%)` : 'Activate Proklamasi Compress'}
+                  {/* 3. UBAH TOMBOL MENJADI COMPRESS */}
+                  <button onClick={doProklamasi} disabled={proklamasiProcessing || compressing} style={{ width: '100%', padding: '9px', background: proklamasiProcessing ? '#444' : '#7c4f00', color: '#fff', border: 'none', borderRadius: 6, cursor: proklamasiProcessing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+                    {proklamasiProcessing ? `Compressing (${progressPercent}%)` : 'Compress'}
                   </button>
 
-                  {status && proklamasiProcessing && (
-                    <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 4, fontSize: 12, background: 'rgba(255,255,255,0.05)', color: '#aaa', border: '1px solid #333' }}>
-                      {status}
+                  {/* 2. WARNA NOTIFIKASI BERES SEWARNA DENGAN TOMBOL (#7c4f00) */}
+                  {proklamasiStatus && (
+                    <div style={{ 
+                      marginTop: 12, padding: '8px 10px', borderRadius: 4, fontSize: 12, 
+                      background: proklamasiStatus.startsWith('✅') ? 'rgba(124, 79, 0, 0.15)' : 'rgba(244,67,54,0.1)', 
+                      color: proklamasiStatus.startsWith('✅') ? '#ffcc70' : '#f44336', 
+                      border: `1px solid ${proklamasiStatus.startsWith('✅') ? '#7c4f00' : '#f44336'}` 
+                    }}>
+                      {proklamasiStatus}
                     </div>
                   )}
 
@@ -1275,12 +1375,12 @@ export default function App() {
                     <div
                       draggable="true"
                       onDragStart={(e) => handleNativeDragStart(e, proklamasiPath)}
-                      style={{ marginTop: 14, padding: '16px', background: 'rgba(124, 79, 0, 0.2)', border: '2px dashed #a06a00', borderRadius: 6, textAlign: 'center', cursor: 'grab', userSelect: 'none', transition: 'background 0.2s' }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124, 79, 0, 0.35)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(124, 79, 0, 0.2)'}
+                      style={{ marginTop: 14, padding: '16px', background: 'rgba(124, 79, 0, 0.15)', border: '2px dashed #7c4f00', borderRadius: 6, textAlign: 'center', cursor: 'grab', userSelect: 'none', transition: 'background 0.2s' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124, 79, 0, 0.25)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(124, 79, 0, 0.15)'}
                     >
-                      <div style={{ fontSize: 24, marginBottom: 4 }}>📼</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: '#ffcc70' }}>PROKLAMASI READY TO DRAG!</div>
+                      <div style={{ fontSize: 24, marginBottom: 4 }}> </div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#ffcc70' }}>READY TO DRAG & DROP</div>
                       <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Click & Hold → drag anywhere</div>
                     </div>
                   )}
